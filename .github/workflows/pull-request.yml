@@ -1,0 +1,8 @@
+name: Pull request
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml

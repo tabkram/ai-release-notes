@@ -1,0 +1,32 @@
+name: Unpublish from npm
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Pre-release version to unpublish
+        required: true
+        type: string
+      confirm:
+        description: Type "I confirm to unpublish" to continue
+        required: true
+        type: string
+jobs:
+  unpublish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Validate destructive action
+        env:
+          VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          test "$CONFIRM" = "I confirm to unpublish"
+          [[ "$VERSION" =~ -(canary|dev|beta|alpha|rc)(\.|$) ]] || { echo "Only prerelease versions can be unpublished."; exit 1; }
+      - name: Unpublish package version
+        env:
+          VERSION: ${{ inputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm unpublish "ai-release-notes@$VERSION"
