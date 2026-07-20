@@ -11,7 +11,7 @@ import {
   buildUserPrompt,
   resolveInstructions,
 } from "./prompts/builder.js";
-import { formatReleaseNote, markdownToHtml, renderReleaseNoteHtml } from "./release.js";
+import { formatReleaseNote, renderReleaseNoteHtml } from "./release.js";
 import { loadContextFiles } from "./context.js";
 import type { GenerateOptions, GenerateResult, GenerationUsage } from "./types.js";
 import { readFile } from "fs/promises";
@@ -170,24 +170,20 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const needsHtml = outputConfigs.some((output) => output.format === "html");
   const outputFormat = options.format || outputConfigs[0]?.format || "md";
   if (outputFormat === "html" || needsHtml) {
-    const htmlTitle = `${config.projectName ? config.projectName + " · " : ""}Release ${options.toVersion}`;
     const template = await readFile(
       resolve(__dirname, "../templates/default-release-note.html"),
       "utf-8"
     );
-    const primaryHtml = renderReleaseNoteHtml(template, llmResult.text, {
+    const renderHtmlRelease = (releaseMarkdown: string) => renderReleaseNoteHtml(template, releaseMarkdown, {
       fromVersion: options.fromVersion,
       toVersion: options.toVersion,
       environment: options.environment,
       date,
       projectName: config.projectName,
     });
-    result.html = result.localized.length === 1
-      ? primaryHtml
-      : markdownToHtml(markdown, htmlTitle);
-    result.localized[0].html = primaryHtml;
-    for (const release of result.localized.slice(1)) {
-      release.html = markdownToHtml(release.markdown, htmlTitle);
+    result.html = renderHtmlRelease(markdown);
+    for (const release of result.localized) {
+      release.html = renderHtmlRelease(release.markdown);
     }
   }
 

@@ -6,4 +6,4 @@ A concise release history for {{environment}}. The newest release is listed firs
 {{releases}}
 
 ---
-_Generated with ai-release-notes v{{version}}._
+_Generated with [tabkram/ai-release-notes](https://github.com/tabkram/ai-release-notes) v{{version}}._

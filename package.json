@@ -17,6 +17,7 @@
     "build": "tsc",
     "dev": "tsx src/bin/cli.ts",
     "lint": "tsc --noEmit",
+    "test": "tsx --test test/release.test.ts",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

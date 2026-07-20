@@ -2,6 +2,8 @@
  * Release note formatting
  */
 
+import { AI_RELEASE_NOTES_VERSION } from "./version.js";
+
 /**
  * Format the final release note with header.
  */
@@ -47,11 +49,12 @@ export function renderReleaseNoteHtml(
     .replaceAll("{{toVersion}}", escapeHtml(params.toVersion))
     .replaceAll("{{environment}}", escapeHtml(params.environment))
     .replaceAll("{{date}}", escapeHtml(params.date))
+    .replaceAll("{{version}}", AI_RELEASE_NOTES_VERSION)
     .replaceAll("{{content}}", renderMarkdown(content));
 }
 
 /** Convert Markdown to self-contained, browser-friendly HTML. */
-export function markdownToHtml(markdown: string, title = "Release Notes"): string {
+export function markdownToHtml(markdown: string, title = "Release Notes", footer = ""): string {
   const html = renderMarkdown(markdown);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -66,10 +69,12 @@ export function markdownToHtml(markdown: string, title = "Release Notes"): strin
 html { background: var(--page); }
 body { max-width: 54rem; margin: 0 auto; padding: 3rem 1.5rem; background: var(--page); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 1rem; line-height: 1.65; }
 main { min-width: 0; }
-h1, h2, h3 { color: var(--text); line-height: 1.25; letter-spacing: -0.015em; }
+h1, h2, h3, h4, h5, h6 { color: var(--text); line-height: 1.25; letter-spacing: -0.015em; }
 h1 { margin: 0 0 1.75rem; font-size: clamp(1.9rem, 4vw, 2.6rem); }
 h2 { margin: 2.25rem 0 0.85rem; padding-bottom: 0.45rem; border-bottom: 1px solid var(--line); font-size: 1.4rem; }
 h3 { margin: 1.75rem 0 0.65rem; font-size: 1.1rem; }
+h4 { margin: 1.5rem 0 0.55rem; font-size: 1rem; }
+h5, h6 { margin: 1.25rem 0 0.45rem; font-size: 0.95rem; }
 p { margin: 0.85rem 0; }
 section { margin: 2rem 0; }
 .release-entry { margin: 1.25rem 0; padding: 1.35rem 1.5rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--surface); }
@@ -91,6 +96,7 @@ footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line
 <body>
 <main>
 ${html}
+${footer}
 </main>
 </body>
 </html>`;
@@ -100,12 +106,15 @@ function renderMarkdown(markdown: string): string {
   const output: string[] = [];
   const paragraph: string[] = [];
   const codeLines: string[] = [];
-  let listType: "ul" | "ol" | undefined;
+  const listStack: Array<{ type: "ul" | "ol"; indent: number; itemOpen: boolean }> = [];
   let inCodeBlock = false;
 
   const closeList = () => {
-    if (listType) output.push(`</${listType}>`);
-    listType = undefined;
+    while (listStack.length > 0) {
+      const list = listStack.pop()!;
+      if (list.itemOpen) output.push("</li>");
+      output.push(`</${list.type}>`);
+    }
   };
   const closeParagraph = () => {
     if (paragraph.length > 0) output.push(`<p>${inlineMarkdown(paragraph.join(" "))}</p>`);
@@ -116,9 +125,37 @@ function renderMarkdown(markdown: string): string {
     codeLines.length = 0;
     inCodeBlock = false;
   };
+  const openListItem = (type: "ul" | "ol", indent: number, content: string) => {
+    let current = listStack.at(-1);
+
+    while (current && indent < current.indent) {
+      const list = listStack.pop()!;
+      if (list.itemOpen) output.push("</li>");
+      output.push(`</${list.type}>`);
+      current = listStack.at(-1);
+    }
+
+    if (!current || indent > current.indent) {
+      output.push(`<${type}>`);
+      current = { type, indent, itemOpen: false };
+      listStack.push(current);
+    } else if (current.type !== type) {
+      if (current.itemOpen) output.push("</li>");
+      output.push(`</${current.type}>`);
+      listStack.pop();
+      output.push(`<${type}>`);
+      current = { type, indent, itemOpen: false };
+      listStack.push(current);
+    } else if (current.itemOpen) {
+      output.push("</li>");
+    }
+
+    output.push(`<li>${inlineMarkdown(content)}`);
+    current.itemOpen = true;
+  };
 
   for (const line of markdown.replace(/\r\n/g, "\n").split("\n")) {
-    if (line.startsWith("```")) {
+    if (/^\s*(```|~~~)/.test(line)) {
       if (inCodeBlock) closeCodeBlock();
       else {
         closeParagraph();
@@ -137,31 +174,29 @@ function renderMarkdown(markdown: string): string {
       continue;
     }
 
-    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
-    const listItem = /^\s*([-*])\s+(.+)$/.exec(line);
-    const numberedItem = /^\s*\d+\.\s+(.+)$/.exec(line);
+    const heading = /^\s{0,3}(#{1,6})\s+(.+)$/.exec(line);
+    const listItem = /^(\s*)[-+*]\s+(.+)$/.exec(line);
+    const numberedItem = /^(\s*)\d+[.)]\s+(.+)$/.exec(line);
     if (heading) {
       closeParagraph();
       closeList();
       const level = heading[1].length;
-      output.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
-    } else if (/^---+$/.test(line.trim())) {
+      const title = heading[2].replace(/\s+#+\s*$/, "");
+      output.push(`<h${level}>${inlineMarkdown(title)}</h${level}>`);
+    } else if (/^(?:[-*_]\s*){3,}$/.test(line.trim())) {
       closeParagraph();
       closeList();
       output.push("<hr>");
     } else if (listItem || numberedItem) {
       closeParagraph();
       const nextListType = numberedItem ? "ol" : "ul";
-      if (listType !== nextListType) {
-        closeList();
-        listType = nextListType;
-        output.push(`<${listType}>`);
-      }
-      output.push(`<li>${inlineMarkdown((listItem?.[2] || numberedItem?.[1])!)}</li>`);
-    } else if (line.startsWith("> ")) {
+      const indentation = (listItem?.[1] || numberedItem?.[1] || "").replace(/\t/g, "  ").length;
+      const content = listItem?.[2] || numberedItem?.[2] || "";
+      openListItem(nextListType, indentation, content);
+    } else if (/^\s{0,3}>\s?/.test(line)) {
       closeParagraph();
       closeList();
-      output.push(`<blockquote>${inlineMarkdown(line.slice(2))}</blockquote>`);
+      output.push(`<blockquote>${inlineMarkdown(line.replace(/^\s{0,3}>\s?/, ""))}</blockquote>`);
     } else if (/^<!--.*-->$/.test(line.trim()) || /^<\/?[a-z][\s\S]*>$/i.test(line.trim())) {
       closeParagraph();
       closeList();
@@ -179,12 +214,23 @@ function renderMarkdown(markdown: string): string {
 }
 
 function inlineMarkdown(value: string): string {
-  return escapeHtml(value)
+  const codeTokens: string[] = [];
+  const rendered = escapeHtml(value)
+    .replace(/`([^`]+)`/g, (_match, code: string) => {
+      const token = `\u0000CODE_${codeTokens.length}\u0000`;
+      codeTokens.push(`<code>${code}</code>`);
+      return token;
+    })
     .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, '<a href="$2">$1</a>')
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>");
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/(^|[^\w])_([^\s](?:.*?[^\s])?)_(?!\w)/g, "$1<em>$2</em>");
+
+  return codeTokens.reduce(
+    (html, code, index) => html.replace(`\u0000CODE_${index}\u0000`, code),
+    rendered
+  );
 }
 
 function escapeHtml(value: string): string {

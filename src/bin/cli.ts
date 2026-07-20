@@ -16,8 +16,9 @@ import { resolve, join, dirname, relative } from "path";
 import clipboardy from "clipboardy";
 import ora from "ora";
 import type { ProviderConfig, ProviderName } from "../types.js";
+import { AI_RELEASE_NOTES_VERSION } from "../version.js";
 
-const CLI_VERSION = "1.0.0";
+const CLI_VERSION = AI_RELEASE_NOTES_VERSION;
 const program = new Command();
 
 type OutputTarget = {
@@ -218,6 +219,7 @@ program
       }
 
       if (outputIndexTargets.length > 0 && outputTargets.length > 0) {
+        const translatedCopyCache = new Map<string, Promise<OutputIndexCopy>>();
         for (const index of outputIndexTargets) {
           await mkdir(dirname(index.path), { recursive: true });
           const releasePaths = getReleasePathsForIndex(index, outputTargets);
@@ -235,6 +237,25 @@ program
                   );
                   addTemplateUsage(result.metadata.usage, translated.usage);
                   return translated.text;
+              }
+              : undefined,
+            translateCopy: !opts.dryRun && shouldTranslateOutputIndexCopy(index.language)
+              ? () => {
+                  const language = index.language!;
+                  const key = languageCode(language);
+                  let translated = translatedCopyCache.get(key);
+                  if (!translated) {
+                    translated = translateOutputIndexCopy(
+                      language,
+                      result.metadata.provider as ProviderName,
+                      config.providers[result.metadata.provider] as ProviderConfig
+                    ).then(({ copy, usage }) => {
+                      addTemplateUsage(result.metadata.usage, usage);
+                      return copy;
+                    });
+                    translatedCopyCache.set(key, translated);
+                  }
+                  return translated;
                 }
               : undefined,
             projectName: config.projectName,
@@ -343,7 +364,6 @@ type OutputIndexCopy = {
   intro: (environment: string) => string;
   changesSince: string;
   readReleaseNotes: string;
-  generatedWith: string;
 };
 
 async function createOrUpdateOutputIndex(params: {
@@ -351,6 +371,7 @@ async function createOrUpdateOutputIndex(params: {
   format: "markdown" | "html";
   templatePath?: string;
   translateTemplate?: (template: string) => Promise<string>;
+  translateCopy?: () => Promise<OutputIndexCopy>;
   projectName?: string;
   environment: string;
   language?: string;
@@ -359,7 +380,9 @@ async function createOrUpdateOutputIndex(params: {
   date: string;
   releasePaths: string[];
 }): Promise<string> {
-  const copy = getOutputIndexCopy(params.language);
+  const copy = params.translateCopy
+    ? await params.translateCopy()
+    : getOutputIndexCopy(params.language);
   const localizedDate = localizeIndexDate(params.date, params.language);
   const releaseId = [params.environment, params.fromVersion, params.toVersion]
     .map((value) => encodeURIComponent(value))
@@ -370,14 +393,17 @@ async function createOrUpdateOutputIndex(params: {
 
   if (existsSync(params.outputPath)) {
     const existing = await readFile(params.outputPath, "utf-8");
-    return ensureOutputIndexFooter(
-      insertOrUpdateReleaseEntry(
-        localizeExistingIndexChrome(existing, params.format, indexTitle, intro),
-        releaseEntry,
-        releaseId
+    const normalizedExisting = params.format === "html"
+      ? unwrapHtmlDocumentCodeFence(existing)
+      : existing;
+    return insertOrUpdateReleaseEntry(
+      localizeExistingIndexEntries(
+        localizeExistingIndexChrome(normalizedExisting, params.format, indexTitle, intro),
+        params.format,
+        copy
       ),
-      params.format,
-      copy
+      releaseEntry,
+      releaseId
     );
   }
 
@@ -430,7 +456,7 @@ function buildOutputIndexEntry(
         return `<a href="${href}">${escapeHtml(copy.readReleaseNotes)} <span aria-hidden="true">→</span></a>`;
       })
       .join("\n");
-    return `${marker}\n<section class="release-entry">\n<h2>${escapeHtml(title)}</h2>\n<p class="release-meta">${escapeHtml(metadata)}</p>\n<p class="release-link">${links}</p>\n</section>`;
+    return `${marker}\n<section class="release-entry">\n<h2>${escapeHtml(title)}</h2>\n<p class="release-meta"><em>${escapeHtml(metadata)}</em></p>\n<p class="release-link">${links}</p>\n</section>`;
   }
 
   const links = releasePaths
@@ -475,35 +501,44 @@ function renderOutputIndexTemplate(
     .replaceAll("{{version}}", values.version);
 }
 
-function buildOutputIndexFooter(format: "markdown" | "html", copy: OutputIndexCopy): string {
-  const attribution = `ai-release-notes v${CLI_VERSION}`;
-  if (format === "html") {
-    return `<footer>${copy.generatedWith} ${attribution}</footer>`;
-  }
-  return `---\n_${copy.generatedWith} ${attribution}._`;
-}
-
-function ensureOutputIndexFooter(
+function localizeExistingIndexEntries(
   content: string,
   format: "markdown" | "html",
   copy: OutputIndexCopy
 ): string {
-  const footer = buildOutputIndexFooter(format, copy);
   if (format === "markdown") {
-    const generatedFooter = /\n---\n_(?:Generated by|Generated with|Generado con) [\s\S]*?\._\s*$/;
-    if (generatedFooter.test(content)) {
-      return content.replace(generatedFooter, "\n" + footer + "\n");
-    }
-    return content.trimEnd() + "\n\n" + footer + "\n";
+    return content
+      .replace(
+        /(<!-- ai-release-notes:release [^>]+ -->\n## )(?:Release|Versión|Version)\s+/g,
+        (_match, prefix: string) => `${prefix}${copy.release} `
+      )
+      .replace(
+        /(^_[^\n]*? · [^\n]*? · )(?:Changes since|Cambios desde|Changements depuis)\s+/gm,
+        (_match, prefix: string) => `${prefix}${copy.changesSince} `
+      )
+      .replace(
+        /\[(?:Read release notes|Ver notas de la versión|Voir les notes de version) →\]/g,
+        `[${copy.readReleaseNotes} →]`
+      );
   }
-  const generatedFooter = /<footer>(?:Generated (?:by|with)|Generado con)[\s\S]*?<\/footer>/i;
-  if (generatedFooter.test(content)) {
-    return content.replace(generatedFooter, footer);
-  }
-  if (/<\/main>\s*<\/body>/i.test(content)) {
-    return content.replace(/<\/main>\s*<\/body>/i, footer + "\n</main>\n</body>");
-  }
-  return content.replace(/<\/body>/i, footer + "\n</body>");
+
+  return content
+    .replace(
+      /(<section class="release-entry">\n<h2>)(?:Release|Versión|Version)\s+/g,
+      (_match, prefix: string) => `${prefix}${escapeHtml(copy.release)} `
+    )
+    .replace(
+      /(<p class="release-meta">.*? · .*? · )(?:Changes since|Cambios desde|Changements depuis)\s+/g,
+      (_match, prefix: string) => `${prefix}${escapeHtml(copy.changesSince)} `
+    )
+    .replace(
+      /(<a href="[^"]+">)(?:Read release notes|Ver notas de la versión|Voir les notes de version)(?= <span aria-hidden="true">→<\/span><\/a>)/g,
+      (_match, prefix: string) => `${prefix}${escapeHtml(copy.readReleaseNotes)}`
+    )
+    .replace(
+      /<p class="release-meta">(?!<em>)([\s\S]*?)<\/p>/g,
+      (_match, metadata: string) => `<p class="release-meta"><em>${metadata}</em></p>`
+    );
 }
 
 function localizeExistingIndexChrome(
@@ -531,7 +566,7 @@ function localizeExistingIndexChrome(
 }
 
 function getOutputIndexCopy(language?: string): OutputIndexCopy {
-  const code = language?.toLowerCase().split(/[-_]/, 1)[0];
+  const code = language ? languageCode(language) : undefined;
   if (code === "es") {
     return {
       release: "Versión",
@@ -539,7 +574,15 @@ function getOutputIndexCopy(language?: string): OutputIndexCopy {
       intro: (environment) => `Un historial conciso de versiones para ${environment}. Las más recientes aparecen primero.`,
       changesSince: "Cambios desde",
       readReleaseNotes: "Ver notas de la versión",
-      generatedWith: "Generado con",
+    };
+  }
+  if (code === "fr") {
+    return {
+      release: "Version",
+      releaseNotes: "Notes de version",
+      intro: (environment) => `Un historique concis des versions pour ${environment}. Les plus récentes apparaissent en premier.`,
+      changesSince: "Changements depuis",
+      readReleaseNotes: "Voir les notes de version",
     };
   }
   return {
@@ -548,7 +591,6 @@ function getOutputIndexCopy(language?: string): OutputIndexCopy {
     intro: (environment) => `A concise release history for ${environment}. The newest release is listed first.`,
     changesSince: "Changes since",
     readReleaseNotes: "Read release notes",
-    generatedWith: "Generated with",
   };
 }
 
@@ -568,6 +610,62 @@ function shouldTranslateTemplate(templateLanguage: string, outputLanguage?: stri
   return languageCode(templateLanguage) !== languageCode(outputLanguage);
 }
 
+function shouldTranslateOutputIndexCopy(language?: string): boolean {
+  return Boolean(language && languageCode(language) !== "en");
+}
+
+async function translateOutputIndexCopy(
+  language: string,
+  providerName: ProviderName,
+  providerConfig: ProviderConfig
+): Promise<{ copy: OutputIndexCopy; usage: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+  const result = await callLLM(
+    providerName,
+    providerConfig,
+    "You translate the labels used in a release-summary index. Return only valid JSON with these string keys: " +
+      "release, releaseNotes, intro, changesSince, readReleaseNotes. " +
+      "The intro value must preserve {{environment}} exactly. Do not include Markdown, HTML, or explanations.",
+    `Target language: ${language}\n\nEnglish source:\n` +
+      JSON.stringify({
+        release: "Release",
+        releaseNotes: "Release notes",
+        intro: "A concise release history for {{environment}}. The newest release is listed first.",
+        changesSince: "Changes since",
+        readReleaseNotes: "Read release notes",
+      })
+  );
+  const rawJson = result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let translated: unknown;
+  try {
+    translated = JSON.parse(rawJson);
+  } catch {
+    throw new Error("Could not parse translated output-index labels as JSON");
+  }
+  if (!isOutputIndexCopyTranslation(translated)) {
+    throw new Error("Translated output-index labels are incomplete");
+  }
+
+  return {
+    copy: {
+      release: translated.release,
+      releaseNotes: translated.releaseNotes,
+      intro: (environment) => translated.intro.replaceAll("{{environment}}", environment),
+      changesSince: translated.changesSince,
+      readReleaseNotes: translated.readReleaseNotes,
+    },
+    usage: result.usage,
+  };
+}
+
+function isOutputIndexCopyTranslation(value: unknown): value is Record<keyof Omit<OutputIndexCopy, "intro"> | "intro", string> {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return ["release", "releaseNotes", "intro", "changesSince", "readReleaseNotes"]
+    .every((key) => typeof candidate[key] === "string" && candidate[key].trim().length > 0)
+    && typeof candidate.intro === "string"
+    && candidate.intro.includes("{{environment}}");
+}
+
 async function translateOutputIndexTemplate(
   template: string,
   language: string,
@@ -582,11 +680,22 @@ async function translateOutputIndexTemplate(
       "Translate every human-readable sentence into the requested language, but preserve all HTML, CSS, Markdown syntax, URLs, and protected tokens exactly.",
     `Target language: ${language}\n\nTemplate:\n${protectedTemplate.template}`
   );
-  const translated = restoreTemplateTokens(result.text, protectedTemplate.tokens);
+  const translated = unwrapHtmlDocumentCodeFence(
+    restoreTemplateTokens(result.text, protectedTemplate.tokens)
+  );
   if (!translated.includes(RELEASES_MARKER) || !translated.includes("{{releases}}")) {
     throw new Error("Translated output-index template did not preserve the required releases marker or {{releases}} token");
   }
   return { text: translated, usage: result.usage };
+}
+
+/** Models occasionally wrap an HTML template in a Markdown code fence. */
+function unwrapHtmlDocumentCodeFence(content: string): string {
+  const openingFence = /^\s*```html?\s*\r?\n(?=\s*<!doctype html|\s*<html\b)/i;
+  if (!openingFence.test(content)) return content;
+  return content
+    .replace(openingFence, "")
+    .replace(/\r?\n```\s*$/, "");
 }
 
 function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
