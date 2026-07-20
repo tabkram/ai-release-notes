@@ -1,0 +1,94 @@
+# ai-release-notes configuration
+#
+# IMPORTANT: API keys are NOT stored in this file.
+# Only the API key for the provider you use is required.
+# Set it as an environment variable before running:
+#
+#   export OPENAI_API_KEY=sk-...        # for OpenAI
+#   export ANTHROPIC_API_KEY=sk-ant-... # for Anthropic
+#   export MISTRAL_API_KEY=...          # for Mistral
+#   export GOOGLE_API_KEY=...           # for Google
+#
+# You only need ONE — the one matching your chosen provider.
+
+provider: openai
+
+providers:
+  openai:
+    model: gpt-4o
+    temperature: 0.3
+    maxTokens: 4000
+
+  anthropic:
+    model: claude-sonnet-4-20250514
+    temperature: 0.3
+    maxTokens: 4000
+
+  mistral:
+    model: mistral-large-latest
+    temperature: 0.3
+    maxTokens: 4000
+
+  google:
+    model: gemini-1.5-pro
+    temperature: 0.3
+    maxTokens: 4000
+
+  ollama:
+    baseURL: http://localhost:11434/v1
+    model: llama3.1
+    temperature: 0.3
+
+# ─────────────────────────────────────────
+# Prompt customization
+# ─────────────────────────────────────────
+
+prompt:
+  language: en
+
+  vocabulary:
+    - API
+    - endpoint
+    - webhook
+    - SDK
+
+  sections:
+    features:
+      icon: "🚀"
+      title: "New Features"
+    improvements:
+      icon: "✨"
+      title: "Improvements"
+    fixes:
+      icon: "🐛"
+      title: "Bug Fixes"
+    technical:
+      icon: "⚙️"
+      title: "Technical Changes"
+
+  instructions: |
+    - Do NOT mention commit hashes
+    - Do NOT mention internal ticket IDs
+    - Keep sentences concise
+    - Group by domain
+
+# ─────────────────────────────────────────
+# Git settings
+# ─────────────────────────────────────────
+
+git:
+  commitFormat: conventional
+  excludeTypes:
+    - chore
+    - docs
+    - style
+    - ci
+  maxCommits: 200
+
+# ─────────────────────────────────────────
+# Output settings
+# ─────────────────────────────────────────
+
+output:
+  format: markdown
+  saveTo: ./RELEASE_NOTES.md

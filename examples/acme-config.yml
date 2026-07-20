@@ -1,0 +1,83 @@
+# Example: ACME Corp project configuration
+# Copy this to your project root as .ai-release-notes.yml
+#
+# IMPORTANT: API keys are NOT stored in this file.
+# Only the API key for the provider you use is required.
+# Set it as an environment variable before running:
+#
+#   export ANTHROPIC_API_KEY=sk-ant-... # for Anthropic (default here)
+#   export OPENAI_API_KEY=sk-...        # for OpenAI
+#
+# You only need ONE — the one matching your chosen provider.
+
+provider: anthropic
+
+providers:
+  anthropic:
+    model: claude-sonnet-4-20250514
+    temperature: 0.3
+    maxTokens: 4000
+
+  openai:
+    model: gpt-4o
+    temperature: 0.3
+    maxTokens: 4000
+
+# ─────────────────────────────────────────
+# Project-specific prompt config
+# ─────────────────────────────────────────
+
+prompt:
+  language: en
+
+  vocabulary:
+    - microservice
+    - GraphQL
+    - gRPC
+    - event bus
+    - saga pattern
+    - circuit breaker
+
+  sections:
+    features:
+      icon: "🚀"
+      title: "New Features"
+    api:
+      icon: "🔌"
+      title: "API Changes"
+    performance:
+      icon: "⚡"
+      title: "Performance"
+    security:
+      icon: "🔒"
+      title: "Security"
+    fixes:
+      icon: "🐛"
+      title: "Bug Fixes"
+    technical:
+      icon: "⚙️"
+      title: "Technical"
+
+  instructions:
+    file: ./docs/release-instructions.md
+
+# ─────────────────────────────────────────
+# Git settings
+# ─────────────────────────────────────────
+
+git:
+  commitFormat: conventional
+  excludeTypes:
+    - chore
+    - docs
+    - style
+    - ci
+  maxCommits: 200
+
+# ─────────────────────────────────────────
+# Output settings
+# ─────────────────────────────────────────
+
+output:
+  format: markdown
+  saveTo: ./RELEASE_NOTES.md
