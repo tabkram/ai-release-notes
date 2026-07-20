@@ -50,7 +50,6 @@ export type {
   ReleaseNotesConfig,
   GenerateOptions,
   GenerateResult,
-  SectionConfig,
   PromptConfig,
   ContextFile,
 } from "./types.js";

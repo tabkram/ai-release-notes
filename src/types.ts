@@ -40,17 +40,6 @@ export type ProviderName =
   | "ollama";
 
 // ─────────────────────────────────────────
-// Section configuration
-// ─────────────────────────────────────────
-
-export const SectionConfigSchema = z.object({
-  icon: z.string().optional(),
-  title: z.string(),
-});
-
-export type SectionConfig = z.infer<typeof SectionConfigSchema>;
-
-// ─────────────────────────────────────────
 // Instructions — can be inline text or a file path
 // ─────────────────────────────────────────
 
@@ -70,9 +59,7 @@ export type InstructionsConfig = z.infer<typeof InstructionsConfigSchema>;
 export const PromptConfigSchema = z.object({
   system: z.string().optional(),
   user: z.string().optional(),
-  language: z.string().default("en"),
-  vocabulary: z.array(z.string()).optional(),
-  sections: z.record(SectionConfigSchema).optional(),
+  languages: z.array(z.string().min(1)).min(1).default(["en"]),
   /**
    * Additional instructions for the LLM.
    * Can be:
@@ -97,16 +84,22 @@ export const GitConfigSchema = z.object({
 export const OutputConfigSchema = z.object({
   format: z.enum(["markdown", "html"]).default("markdown"),
   template: z.string().optional(),
-  saveTo: z.string().optional(),
+  saveTo: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
   clipboard: z.boolean().default(false),
 });
 
+export const OutputsConfigSchema = z.union([
+  OutputConfigSchema,
+  z.array(OutputConfigSchema).min(1),
+]);
+
 export const ReleaseNotesConfigSchema = z.object({
+  projectName: z.string().min(1).optional(),
   provider: z.string().default("openai"),
   providers: z.record(ProviderConfigSchema),
   prompt: PromptConfigSchema.optional(),
   git: GitConfigSchema.optional(),
-  output: OutputConfigSchema.optional(),
+  output: OutputsConfigSchema.optional(),
 });
 
 export type ReleaseNotesConfig = z.infer<typeof ReleaseNotesConfigSchema>;
@@ -168,6 +161,11 @@ export interface GenerateOptions {
 export interface GenerateResult {
   markdown: string;
   html?: string;
+  localized: Array<{
+    language: string;
+    markdown: string;
+    html?: string;
+  }>;
   metadata: {
     fromVersion: string;
     toVersion: string;

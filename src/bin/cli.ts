@@ -6,9 +6,9 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { generate } from "../generator.js";
-import { createDefaultConfig, resolveProviderAlias } from "../config.js";
+import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
 import { getLatestTag, getPreviousTag } from "../git.js";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve, join, dirname } from "path";
 import clipboardy from "clipboardy";
@@ -58,7 +58,7 @@ program
   .option("--config <path>", "Path to config file")
   .option("--output <path>", "Output file path (override config)")
   .option("--output-dir <dir>", "Output directory (default: current dir)")
-  .option("--format <format>", "Output format: md or html", "md")
+  .option("--format <format>", "Output format: md or html")
   .option("--template <path>", "Path to custom template file")
   .option("--changelog <path>", "Path to a file containing raw changelog (skip git)")
   .option("--context <paths...>", "Context files or directories (specs, models, etc.)")
@@ -115,21 +115,53 @@ program
       console.log(chalk.cyan("─".repeat(60)) + "\n");
 
       // Determine output path
-      let outputPath = opts.output;
-      if (!outputPath && opts.outputDir) {
+      let outputTargets = opts.output
+        ? [{ path: opts.output, markdown: result.markdown, html: result.html, format: opts.format }]
+        : [];
+      if (outputTargets.length === 0 && opts.outputDir) {
         const ext = opts.format === "html" ? "html" : "md";
         const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${ext}`;
-        outputPath = join(resolve(opts.outputDir), filename);
+        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: result.markdown, html: result.html, format: opts.format }];
+      }
+
+      if (outputTargets.length === 0) {
+        const config = await loadConfig(opts.config);
+        if (config.output) {
+          const outputConfigs = Array.isArray(config.output) ? config.output : [config.output];
+          outputTargets = outputConfigs.flatMap((output) => {
+            if (!output.saveTo) return [];
+            const saveTo = Array.isArray(output.saveTo) ? output.saveTo : [output.saveTo];
+            return saveTo.flatMap((path) => path.includes("{lang}")
+              ? result.localized.map((release) => ({
+                  path: getOutputPath(path, opts.env, release.language, opts.from, opts.to),
+                  markdown: release.markdown,
+                  html: release.html,
+                  format: output.format,
+                }))
+              : [{
+                  path: getOutputPath(path, opts.env, undefined, opts.from, opts.to),
+                  markdown: result.markdown,
+                  html: result.html,
+                  format: output.format,
+                }]
+            );
+          });
+        }
       }
 
       // Save to file
-      if (outputPath) {
+      for (const target of outputTargets) {
+        const outputPath = target.path;
         await mkdir(dirname(resolve(outputPath)), { recursive: true });
-        const content = opts.format === "html" && result.html
-          ? result.html
-          : result.markdown;
-        await writeFile(resolve(outputPath), content, "utf-8");
-        console.log(chalk.green(`💾 Saved to ${outputPath}`));
+        const content = target.format === "html" && target.html
+          ? target.html
+          : target.markdown;
+        const saved = await saveReleaseNotes(resolve(outputPath), content, target.markdown);
+        if (saved === "skipped") {
+          console.log(chalk.yellow("ℹ️  Release " + fromVersion + " → " + toVersion + " is already in " + outputPath));
+        } else {
+          console.log(chalk.green("💾 Saved to " + outputPath));
+        }
       }
 
       // Clipboard
@@ -171,3 +203,43 @@ program
   });
 
 program.parse();
+
+function getOutputPath(
+  saveTo: string,
+  environment: string,
+  language?: string,
+  fromVersion?: string,
+  toVersion?: string
+): string {
+  const normalizedEnvironment = environment.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  const normalizedLanguage = language?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return saveTo
+    .replaceAll("{env}", normalizedEnvironment)
+    .replaceAll("{lang}", normalizedLanguage || "{lang}")
+    .replaceAll("{from}", fromVersion || "start")
+    .replaceAll("{to}", toVersion || "end");
+}
+
+async function saveReleaseNotes(outputPath: string, content: string, markdown: string): Promise<"saved" | "skipped"> {
+  const header = markdown.split("\n", 1)[0];
+  const existing = existsSync(outputPath) ? await readFile(outputPath, "utf-8") : "";
+  if (existing.includes(header)) return "skipped";
+
+  const merged = outputPath.endsWith(".html")
+    ? appendHtmlRelease(existing, content)
+    : existing.trim()
+      ? content.trim() + "\n\n---\n\n" + existing.trim() + "\n"
+      : content.trim() + "\n";
+  await writeFile(outputPath, merged, "utf-8");
+  return "saved";
+}
+
+function appendHtmlRelease(existing: string, content: string): string {
+  if (!existing.trim()) return content;
+
+  const newBody = content
+    .replace(/^[\s\S]*?<body[^>]*>/i, "")
+    .replace(/<\/body>[\s\S]*$/i, "")
+    .trim();
+  return existing.replace(/<\/body>/i, "<hr>\n<section>\n" + newBody + "\n</section>\n</body>");
+}

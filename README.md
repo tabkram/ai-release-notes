@@ -4,7 +4,7 @@ Generic AI-powered release notes generator using the [Vercel AI SDK](https://sdk
 
 Transform your git changelog into clean, business-readable release notes — with support for OpenAI, Anthropic, Mistral, Google, Ollama, and more.
 
-**Fully customizable** via configuration: language, sections, vocabulary, instructions, output format, templates, and context files.
+**Fully customizable** via configuration: language, instructions, output format, templates, and context files.
 
 **Security-first**: API keys are never stored in config files. Only the key for your chosen provider is required via environment variable.
 
@@ -207,7 +207,7 @@ dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env 
 | `--date <date>` | Release date |
 | `--with <provider>` | LLM override: `claude`, `gpt4`, `mistral`, `gemini`, `ollama` |
 | `--config <path>` | Path to config file |
-| `--output <path>` | Output file path |
+| `--output <path>` | Output file path (overrides `output.saveTo`) |
 | `--output-dir <dir>` | Output directory (auto-names the file) |
 | `--format <md\|html>` | Output format (default: `md`) |
 | `--template <path>` | Custom template file |
@@ -223,6 +223,8 @@ dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env 
 The config file (`.ai-release-notes.yml`) contains everything **except** API keys:
 
 ```yaml
+projectName: My Product
+
 provider: openai
 
 providers:
@@ -235,31 +237,109 @@ providers:
 
 # ── Prompt customization ──
 prompt:
-  language: en
-  vocabulary:
-    - API
-    - endpoint
-    - webhook
-  sections:
-    features:
-      icon: "🚀"
-      title: "New Features"
-    fixes:
-      icon: "🐛"
-      title: "Bug Fixes"
+  languages:
+    - en
+    - fr
   instructions: |
-    - Do NOT mention commit hashes
-    - Keep sentences concise
-
-# ── Git settings ──
-git:
-  excludeTypes: [chore, docs, style]
-  maxCommits: 200
+    - Preserve the terms API, endpoint, and webhook.
+    - Use sections for New Features and Bug Fixes when relevant.
+    - Do NOT mention commit hashes.
+    - Keep sentences concise.
 
 # ── Output settings ──
 output:
-  format: markdown
-  saveTo: ./RELEASE_NOTES.md
+  - format: markdown
+    saveTo: ./RELEASE_NOTES.md
+```
+
+### Multiple languages
+
+Set `prompt.languages` in output order. The first language is generated from
+the changelog. Each later language is translated from that finished release
+note, preserving the facts, Markdown structure, and your inline or file-based
+instructions.
+
+```yaml
+prompt:
+  languages: [en, fr, de]
+```
+
+### Saving release history
+
+`output` is a list of format-and-destination definitions. Its `saveTo`
+writes release notes automatically when no `--output` or
+`--output-dir` is supplied. Releases are added at the top of the file; running
+the same `--from` / `--to` range again does not create a duplicate entry.
+
+Use one shared file for every environment:
+
+```yaml
+output:
+  - format: markdown
+    saveTo: ./RELEASE_NOTES.md
+```
+
+Use `{env}` only when you want separate files. It is replaced with the
+uppercased environment passed through `--env`:
+
+```yaml
+output:
+  - format: markdown
+    saveTo: ./releases/release-notes-{env}.md
+```
+
+```bash
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --with mistral --env PROD
+# writes ./releases/release-notes-PROD.md
+```
+
+Use `{from}` and `{to}` to include the versions passed through `--from` and
+`--to` in the output filename. When either option is omitted, its placeholder
+is replaced with `start` or `end`, respectively:
+
+```yaml
+output:
+  - format: markdown
+    saveTo: ./RELEASE_NOTES_{env}_{from}_{to}.md
+```
+
+```bash
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --with mistral --env PROD
+# writes ./RELEASE_NOTES_PROD_v1.25.9_v1.28.0.md
+```
+
+Use {lang} to write one file per configured language. It is replaced with the
+lowercased language code:
+
+```yaml
+output:
+  - format: markdown
+    saveTo: ./releases/release-notes-{env}-{lang}.md
+  - format: html
+    saveTo: ./releases/release-notes-{env}-{lang}.html
+```
+
+With prompt.languages: [en, fr] and --env PROD, this writes
+release-notes-PROD-en.* and release-notes-PROD-fr.*. A path without {lang}
+remains one combined multilingual release-history file.
+
+HTML release history is supported too. Set the format and use an `.html`
+file; each release is appended as a section in one valid HTML document:
+
+```yaml
+output:
+  - format: html
+    saveTo: ./releases/release-notes-{env}.html
+```
+
+To save Markdown and HTML in the same run, add a destination for each format:
+
+```yaml
+output:
+  - format: markdown
+    saveTo: ./releases/release-notes-{env}.md
+  - format: html
+    saveTo: ./releases/release-notes-{env}.html
 ```
 
 ---
@@ -288,10 +368,14 @@ prompt:
 
 ### File-based instructions
 
+`ai-release-notes init` creates an `.ai-release-instructions.md` file next
+to the config. The generated config keeps its file reference commented, so
+built-in instructions remain active until you opt in.
+
 ```yaml
 prompt:
   instructions:
-    file: ./docs/release-instructions.md
+    file: ./.ai-release-instructions.md
 ```
 
 ---

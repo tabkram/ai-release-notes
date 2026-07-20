@@ -10,6 +10,8 @@
 #
 # You only need ONE — the one matching your chosen provider.
 
+projectName: ACME Platform
+
 provider: anthropic
 
 providers:
@@ -28,56 +30,16 @@ providers:
 # ─────────────────────────────────────────
 
 prompt:
-  language: en
-
-  vocabulary:
-    - microservice
-    - GraphQL
-    - gRPC
-    - event bus
-    - saga pattern
-    - circuit breaker
-
-  sections:
-    features:
-      icon: "🚀"
-      title: "New Features"
-    api:
-      icon: "🔌"
-      title: "API Changes"
-    performance:
-      icon: "⚡"
-      title: "Performance"
-    security:
-      icon: "🔒"
-      title: "Security"
-    fixes:
-      icon: "🐛"
-      title: "Bug Fixes"
-    technical:
-      icon: "⚙️"
-      title: "Technical"
+  languages:
+    - en
 
   instructions:
-    file: ./docs/release-instructions.md
-
-# ─────────────────────────────────────────
-# Git settings
-# ─────────────────────────────────────────
-
-git:
-  commitFormat: conventional
-  excludeTypes:
-    - chore
-    - docs
-    - style
-    - ci
-  maxCommits: 200
+    file: ./.ai-release-instructions.md
 
 # ─────────────────────────────────────────
 # Output settings
 # ─────────────────────────────────────────
 
 output:
-  format: markdown
-  saveTo: ./RELEASE_NOTES.md
+  - format: markdown
+    saveTo: ./RELEASE_NOTES.md

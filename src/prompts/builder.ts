@@ -27,6 +27,25 @@ export async function resolveInstructions(
   return await readFile(filePath, "utf-8");
 }
 
+/** Build the system prompt used to translate an already-generated release note. */
+export async function buildTranslationSystemPrompt(
+  language: string,
+  instructions?: string
+): Promise<string> {
+  const template = await readFile(
+    resolve(__dirname, "../../prompts/translation-system.md"),
+    "utf-8"
+  );
+  const projectInstructions = instructions
+    ? "\n\nProject instructions to preserve:\n" + instructions
+    : "";
+
+  return template
+    .replaceAll("{{language}}", language)
+    .replaceAll("{{projectInstructions}}", projectInstructions)
+    .trim();
+}
+
 /**
  * Build the system prompt from config or use a default.
  */
@@ -37,21 +56,8 @@ export async function buildSystemPrompt(config?: PromptConfig): Promise<string> 
   }
 
   // Otherwise build from config pieces
-  const language = config?.language || "en";
-  const vocab = config?.vocabulary?.join(", ") || "";
-  const sections = config?.sections;
+  const language = config?.languages?.[0] || "en";
   const instructions = await resolveInstructions(config?.instructions);
-
-  let sectionGuide = "";
-  if (sections && Object.keys(sections).length > 0) {
-    sectionGuide = Object.entries(sections)
-      .map(([_, s]) => `${s.icon || "•"} ${s.title}`)
-      .join("\n");
-  }
-
-  const vocabLine = vocab
-    ? `\nPreserve the following technical vocabulary without over-translating: ${vocab}`
-    : "";
 
   const instructionsBlock = instructions
     ? `\n\nAdditional instructions:\n${instructions}`
@@ -61,10 +67,13 @@ export async function buildSystemPrompt(config?: PromptConfig): Promise<string> 
 
 Your goal: Transform technical changelog entries into clean, business-readable release notes.
 
-Language: ${language}${vocabLine}
+Language: ${language}
 
 Output structure:
-${sectionGuide || "- Features\n- Improvements\n- Bug Fixes\n- Technical"}
+- Features
+- Improvements
+- Bug Fixes
+- Technical
 
 Guidelines:
 - Do NOT mention commit hashes.

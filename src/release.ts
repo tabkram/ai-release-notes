@@ -16,8 +16,8 @@ export function formatReleaseNote(
   }
 ): string {
   const cleanVersion = params.toVersion.replace(/^v/, "");
-  const project = params.projectName ? ` ${params.projectName}` : "";
-  const header = `${project} – Release Notes ${params.environment} (${params.fromVersion} → ${params.toVersion})
+  const project = params.projectName ? `${params.projectName} – ` : "";
+  const header = `${project}Release Notes ${params.environment} (${params.fromVersion} → ${params.toVersion})
 
 Version ${cleanVersion} – ${params.date}
 

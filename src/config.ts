@@ -82,6 +82,9 @@ export async function createDefaultConfig(targetPath: string): Promise<void> {
 # LLM Provider
 # ─────────────────────────────────────────
 
+# Optional: displayed before the release-note title.
+# projectName: My Project
+
 provider: openai
 
 providers:
@@ -115,56 +118,53 @@ providers:
 # ─────────────────────────────────────────
 
 prompt:
-  language: en
+  languages:
+    - en
 
-  vocabulary:
-    - API
-    - endpoint
-    - dashboard
-    - webhook
-
-  sections:
-    features:
-      icon: "🚀"
-      title: "New Features"
-    improvements:
-      icon: "✨"
-      title: "Improvements"
-    fixes:
-      icon: "🐛"
-      title: "Bug Fixes"
-    technical:
-      icon: "⚙️"
-      title: "Technical"
-
-  instructions: |
-    - Do NOT mention commit hashes
-    - Do NOT mention internal ticket IDs
-    - Keep sentences concise
-    - Group by domain
-
-# ─────────────────────────────────────────
-# Git settings
-# ─────────────────────────────────────────
-
-git:
-  commitFormat: conventional
-  excludeTypes:
-    - chore
-    - docs
-    - style
-  maxCommits: 200
+  # Optional: uncomment to customize the built-in release-note instructions.
+  # The file is created by ai-release-notes init, but is not used until
+  # this reference is uncommented.
+  # instructions:
+  #   file: ./.ai-release-instructions.md
 
 # ─────────────────────────────────────────
 # Output settings
 # ─────────────────────────────────────────
 
 output:
-  format: markdown
-  saveTo: ./RELEASE_NOTES.md
+  - format: markdown
+    saveTo: ./RELEASE_NOTES.md
 `;
 
   await writeFile(targetPath, defaultConfig, "utf-8");
+
+  const instructionsPath = resolve(dirname(targetPath), ".ai-release-instructions.md");
+  if (!existsSync(instructionsPath)) {
+    const defaultInstructions = `# AI Release Notes Instructions
+
+<!--
+This optional file is created by ai-release-notes init.
+
+It does not affect generated release notes until you uncomment this in
+.ai-release-notes.yml:
+
+prompt:
+  instructions:
+    file: ./.ai-release-instructions.md
+-->
+
+Use this file for all release-note guidance that is specific to your project.
+For example:
+
+- Preserve product names and technical vocabulary such as API, endpoint,
+  dashboard, and webhook.
+- Use these sections when they contain relevant changes: 🚀 New Features,
+  ✨ Improvements, 🐛 Bug Fixes, and ⚙️ Technical.
+- Do not mention commit hashes or internal ticket IDs.
+- Keep sentences concise and group related changes by domain.
+`;
+    await writeFile(instructionsPath, defaultInstructions, "utf-8");
+  }
 }
 
 // ─────────────────────────────────────────

@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "templates",
+    "prompts",
     "README.md"
   ],
   "scripts": {

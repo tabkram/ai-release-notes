@@ -5,7 +5,12 @@
 import { loadConfig, resolveProviderAlias } from "./config.js";
 import { getChangelog, parseCommits } from "./git.js";
 import { callLLM } from "./llm.js";
-import { buildSystemPrompt, buildUserPrompt } from "./prompts/builder.js";
+import {
+  buildSystemPrompt,
+  buildTranslationSystemPrompt,
+  buildUserPrompt,
+  resolveInstructions,
+} from "./prompts/builder.js";
 import { formatReleaseNote, markdownToHtml } from "./release.js";
 import { loadContextFiles } from "./context.js";
 import type { GenerateOptions, GenerateResult } from "./types.js";
@@ -81,6 +86,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     const dryOutput = `=== DRY RUN ===\n\nSYSTEM PROMPT:\n${systemPrompt}\n\nUSER PROMPT:\n${userPrompt}`;
     return {
       markdown: dryOutput,
+      localized: [{ language: config.prompt?.languages?.[0] || "en", markdown: dryOutput }],
       metadata: {
         fromVersion: options.fromVersion,
         toVersion: options.toVersion,
@@ -97,15 +103,37 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const llmOutput = await callLLM(providerName, providerConfig, systemPrompt, userPrompt);
 
   // ── Format output ──
-  const markdown = formatReleaseNote(llmOutput, {
+  const primaryMarkdown = formatReleaseNote(llmOutput, {
     fromVersion: options.fromVersion,
     toVersion: options.toVersion,
     environment: options.environment,
     date,
+    projectName: config.projectName,
   });
+  const localized = [{
+    language: config.prompt?.languages?.[0] || "en",
+    markdown: primaryMarkdown,
+  }];
+
+  const translationInstructions = await resolveInstructions(config.prompt?.instructions);
+  for (const language of (config.prompt?.languages || ["en"]).slice(1)) {
+    const translatedRelease = await callLLM(
+      providerName,
+      providerConfig,
+      await buildTranslationSystemPrompt(language, translationInstructions),
+      primaryMarkdown
+    );
+    localized.push({ language, markdown: translatedRelease.trim() });
+  }
+  const markdown = localized
+    .map((release, index) => index === 0
+      ? release.markdown
+      : "---\n\n## " + release.language + "\n\n" + release.markdown)
+    .join("\n\n");
 
   const result: GenerateResult = {
     markdown,
+    localized,
     metadata: {
       fromVersion: options.fromVersion,
       toVersion: options.toVersion,
@@ -118,9 +146,16 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   };
 
   // ── HTML output if requested ──
-  const outputFormat = options.format || config.output?.format || "md";
-  if (outputFormat === "html") {
+  const outputConfigs = config.output
+    ? (Array.isArray(config.output) ? config.output : [config.output])
+    : [];
+  const needsHtml = outputConfigs.some((output) => output.format === "html");
+  const outputFormat = options.format || outputConfigs[0]?.format || "md";
+  if (outputFormat === "html" || needsHtml) {
     result.html = markdownToHtml(markdown);
+    for (const release of result.localized) {
+      release.html = markdownToHtml(release.markdown);
+    }
   }
 
   return result;
