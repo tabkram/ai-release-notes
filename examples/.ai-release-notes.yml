@@ -1,94 +1,53 @@
-# ai-release-notes configuration
+# Example: ACME Corp project configuration
+# Copy this file to your project root.
 #
 # IMPORTANT: API keys are NOT stored in this file.
 # Only the API key for the provider you use is required.
 # Set it as an environment variable before running:
 #
+#   export ANTHROPIC_API_KEY=sk-ant-... # for Anthropic (default here)
 #   export OPENAI_API_KEY=sk-...        # for OpenAI
-#   export ANTHROPIC_API_KEY=sk-ant-... # for Anthropic
-#   export MISTRAL_API_KEY=...          # for Mistral
-#   export GOOGLE_API_KEY=...           # for Google
 #
 # You only need ONE — the one matching your chosen provider.
 
-provider: openai
+projectName: ACME Platform
+
+provider: anthropic
 
 providers:
-  openai:
-    model: gpt-4o
-    temperature: 0.3
-    maxTokens: 4000
-
   anthropic:
     model: claude-sonnet-4-20250514
     temperature: 0.3
     maxTokens: 4000
 
-  mistral:
-    model: mistral-large-latest
+  openai:
+    model: gpt-4o
     temperature: 0.3
     maxTokens: 4000
-
-  google:
-    model: gemini-1.5-pro
-    temperature: 0.3
-    maxTokens: 4000
-
-  ollama:
-    baseURL: http://localhost:11434/v1
-    model: llama3.1
-    temperature: 0.3
 
 # ─────────────────────────────────────────
-# Prompt customization
+# Project-specific prompt config
 # ─────────────────────────────────────────
 
 prompt:
-  language: en
+  languages:
+    - en
 
-  vocabulary:
-    - API
-    - endpoint
-    - webhook
-    - SDK
-
-  sections:
-    features:
-      icon: "🚀"
-      title: "New Features"
-    improvements:
-      icon: "✨"
-      title: "Improvements"
-    fixes:
-      icon: "🐛"
-      title: "Bug Fixes"
-    technical:
-      icon: "⚙️"
-      title: "Technical Changes"
-
-  instructions: |
-    - Do NOT mention commit hashes
-    - Do NOT mention internal ticket IDs
-    - Keep sentences concise
-    - Group by domain
-
-# ─────────────────────────────────────────
-# Git settings
-# ─────────────────────────────────────────
-
-git:
-  commitFormat: conventional
-  excludeTypes:
-    - chore
-    - docs
-    - style
-    - ci
-  maxCommits: 200
+  # Optional: create this file and uncomment to add project writing rules.
+  # instructions:
+  #   file: ./.ai-release-instructions.md
 
 # ─────────────────────────────────────────
 # Output settings
 # ─────────────────────────────────────────
 
 output:
+  - format: markdown
+    saveTo: ./releases/RELEASE_NOTES_{env}_{from}_{to}.md
+
+# Output index linking to each generated release file.
+outputIndex:
   format: markdown
-  saveTo: ./RELEASE_NOTES.md
+  saveTo: ./releases/RELEASE_INDEX_{env}.md
+  # Optional: create this file and uncomment to customize the index layout.
+  # template: ./.ai-output-index-template.md

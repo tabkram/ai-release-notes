@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{projectName}} release notes</title>
+<style>
+:root { color-scheme: light dark; --page: #fff; --surface: #f6f7f8; --text: #202124; --muted: #5f6368; --line: #d9dde3; --link: #1558d6; }
+@media (prefers-color-scheme: dark) { :root { --page: #181a1b; --surface: #242729; --text: #e8eaed; --muted: #b8bec5; --line: #3c4043; --link: #8ab4f8; } }
+body { max-width: 54rem; margin: 0 auto; padding: 3rem 1.5rem; background: var(--page); color: var(--text); font: 1rem/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+h1, h2 { line-height: 1.25; }
+h1 { margin: 0 0 0.5rem; font-size: 2rem; }
+.intro, .release-meta, footer { color: var(--muted); }
+.release-entry { margin: 1.25rem 0; padding: 1.35rem 1.5rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--surface); }
+.release-entry h2 { margin: 0; font-size: 1.2rem; }
+.release-meta { margin: 0.45rem 0 1rem; font-size: 0.925rem; }
+.release-link { margin: 0; font-weight: 600; }
+a { color: var(--link); text-underline-offset: 0.16em; }
+footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: 0.875rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>{{projectName}} release notes</h1>
+<p class="intro">A concise release history for {{environment}}. The newest release is listed first.</p>
+
+<!-- ai-release-notes:releases -->
+{{releases}}
+
+<footer>Generated with ai-release-notes v{{version}}</footer>
+</main>
+</body>
+</html>

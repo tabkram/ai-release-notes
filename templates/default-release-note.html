@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{title}}</title>
+<style>
+:root { color-scheme: light dark; --page: #fff; --text: #202124; --muted: #5f6368; --line: #d9dde3; --link: #1558d6; --code: #f6f7f8; }
+@media (prefers-color-scheme: dark) { :root { --page: #181a1b; --text: #e8eaed; --muted: #b8bec5; --line: #3c4043; --link: #8ab4f8; --code: #242729; } }
+body { max-width: 54rem; margin: 0 auto; padding: 3rem 1.5rem; background: var(--page); color: var(--text); font: 1rem/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { margin-bottom: 2rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--line); }
+h1, h2, h3 { line-height: 1.25; }
+h1 { margin: 0; font-size: 2rem; }
+h2 { margin-top: 2rem; font-size: 1.35rem; }
+h3 { margin-top: 1.5rem; font-size: 1.1rem; }
+.meta { margin: 0.5rem 0 0; color: var(--muted); }
+ul, ol { padding-left: 1.35rem; }
+li + li { margin-top: 0.35rem; }
+a { color: var(--link); text-underline-offset: 0.16em; }
+blockquote { margin: 1.25rem 0; padding-left: 1rem; border-left: 3px solid var(--line); color: var(--muted); }
+code { padding: 0.12em 0.35em; border-radius: 0.3rem; background: var(--code); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+pre { padding: 1rem; overflow-x: auto; border: 1px solid var(--line); border-radius: 0.6rem; background: var(--code); }
+pre code { padding: 0; background: none; }
+</style>
+</head>
+<body>
+<article>
+<header>
+<h1>{{title}}</h1>
+<p class="meta">{{environment}} · {{date}} · Changes since {{fromVersion}}</p>
+</header>
+<main>
+{{content}}
+</main>
+</article>
+</body>
+</html>

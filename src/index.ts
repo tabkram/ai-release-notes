@@ -22,6 +22,7 @@ export {
   parseCommits,
   getLatestTag,
   getPreviousTag,
+  getTagCreationDate,
 } from "./git.js";
 
 export {
@@ -36,6 +37,7 @@ export {
 
 export {
   formatReleaseNote,
+  renderReleaseNoteHtml,
   markdownToHtml,
 } from "./release.js";
 

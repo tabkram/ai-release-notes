@@ -93,6 +93,18 @@ export const OutputsConfigSchema = z.union([
   z.array(OutputConfigSchema).min(1),
 ]);
 
+export const OutputIndexConfigSchema = z.object({
+  format: z.enum(["markdown", "html"]).default("markdown"),
+  template: z.string().optional(),
+  templateLanguage: z.string().min(2).default("en"),
+  saveTo: z.string().min(1),
+});
+
+export const OutputIndexesConfigSchema = z.union([
+  OutputIndexConfigSchema,
+  z.array(OutputIndexConfigSchema).min(1),
+]);
+
 export const ReleaseNotesConfigSchema = z.object({
   projectName: z.string().min(1).optional(),
   provider: z.string().default("openai"),
@@ -100,6 +112,7 @@ export const ReleaseNotesConfigSchema = z.object({
   prompt: PromptConfigSchema.optional(),
   git: GitConfigSchema.optional(),
   output: OutputsConfigSchema.optional(),
+  outputIndex: OutputIndexesConfigSchema.optional(),
 });
 
 export type ReleaseNotesConfig = z.infer<typeof ReleaseNotesConfigSchema>;
@@ -124,8 +137,10 @@ export interface GenerateOptions {
   toVersion: string;
   /** Environment name: PROD, QUA, DEV, etc. */
   environment: string;
-  /** Release date (default: today) */
+  /** Explicit display date. Prefer releaseDate for a date selector. */
   date?: string;
+  /** Release date selector: "now", "tag", or an ISO date such as "2026-07-20". */
+  releaseDate?: string;
   /** Override LLM provider */
   provider?: ProviderName | string;
   /** Path to config file */
@@ -174,5 +189,14 @@ export interface GenerateResult {
     provider: string;
     commitCount: number;
     contextFiles?: string[];
+    usage: GenerationUsage;
   };
+}
+
+export interface GenerationUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  modelCalls: number;
+  durationMs: number;
 }

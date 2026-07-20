@@ -69,6 +69,21 @@ npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD --with claude
 npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD --with mistral
 ```
 
+The command saves files according to your configuration and reports the paths
+it updated. To generate notes for the terminal only—without writing release
+files or indexes—use `--stdout`. The Markdown is written to standard output;
+status and token information go to standard error:
+
+```bash
+npx ai-release-notes generate --from v1.25.9 --to v1.28.0 --with mistral --env PROD --stdout
+```
+
+`--dry-run` is different: it shows the prompt without calling the AI provider.
+
+After a generation, the command shows the provider-reported input, output,
+and total token counts, together with the number of model calls and elapsed
+time. Translated releases include every translation call in these totals.
+
 ---
 
 ## How to Get API Keys
@@ -204,7 +219,8 @@ dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env 
 | `--from <version>` | Previous version tag |
 | `--to <version>` | Current version tag |
 | `--env <env>` | **Required.** Environment name (PROD, STAGING, etc.) |
-| `--date <date>` | Release date |
+| `--release-date <value>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
+| `--date <value>` | Alias for `--release-date` |
 | `--with <provider>` | LLM override: `claude`, `gpt4`, `mistral`, `gemini`, `ollama` |
 | `--config <path>` | Path to config file |
 | `--output <path>` | Output file path (overrides `output.saveTo`) |
@@ -214,169 +230,54 @@ dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env 
 | `--changelog <path>` | Raw changelog file (skip git) |
 | `--context <paths...>` | Context files or directories (mixed) |
 | `--dry-run` | Show prompts without calling LLM |
+| `--stdout` | Write generated Markdown to standard output without saving files or indexes |
 | `--clipboard` | Copy result to clipboard |
+
+### Release date
+
+Use the current date (the default), the selected `--to` tag's creation date,
+or an explicit ISO date:
+
+```bash
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --release-date now
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --release-date tag
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --release-date 2026-07-20
+```
+
+In the library API, pass the same values as `releaseDate`. The older `date`
+field remains available when you need to supply an already formatted display
+date.
 
 ---
 
 ## Configuration
 
-The config file (`.ai-release-notes.yml`) contains everything **except** API keys:
+`.ai-release-notes.yml` describes your project and where generated files
+belong. Keep API keys in environment variables; they are never stored in the
+configuration file.
 
-```yaml
-projectName: My Product
+The main parts are simple:
 
-provider: openai
+- `projectName` gives the generated notes their product name.
+- `provider` chooses the AI provider; `providers` lets you set its model and
+  generation options.
+- `prompt` selects the release languages and can point to an instructions file
+  when your team has writing rules.
+- `output` lists the Markdown and/or HTML release files to create. Use
+  `{env}`, `{lang}`, `{from}`, and `{to}` in their names. Missing `--from` and
+  `--to` become `start` and `end`.
+- `outputIndex` is optional. It maintains a release summary with links to
+  every release file. It may be one destination or a list, for example one
+  Markdown and one HTML summary. Add `{lang}` when each language needs its own
+  summary.
 
-providers:
-  openai:
-    model: gpt-4o
-    temperature: 0.3
+Custom instruction and summary templates are optional. The generated config
+keeps their lines commented until you need them.
 
-  anthropic:
-    model: claude-sonnet-4-20250514
-
-# ── Prompt customization ──
-prompt:
-  languages:
-    - en
-    - fr
-  instructions: |
-    - Preserve the terms API, endpoint, and webhook.
-    - Use sections for New Features and Bug Fixes when relevant.
-    - Do NOT mention commit hashes.
-    - Keep sentences concise.
-
-# ── Output settings ──
-output:
-  - format: markdown
-    saveTo: ./RELEASE_NOTES.md
-```
-
-### Multiple languages
-
-Set `prompt.languages` in output order. The first language is generated from
-the changelog. Each later language is translated from that finished release
-note, preserving the facts, Markdown structure, and your inline or file-based
-instructions.
-
-```yaml
-prompt:
-  languages: [en, fr, de]
-```
-
-### Saving release history
-
-`output` is a list of format-and-destination definitions. Its `saveTo`
-writes release notes automatically when no `--output` or
-`--output-dir` is supplied. Releases are added at the top of the file; running
-the same `--from` / `--to` range again does not create a duplicate entry.
-
-Use one shared file for every environment:
-
-```yaml
-output:
-  - format: markdown
-    saveTo: ./RELEASE_NOTES.md
-```
-
-Use `{env}` only when you want separate files. It is replaced with the
-uppercased environment passed through `--env`:
-
-```yaml
-output:
-  - format: markdown
-    saveTo: ./releases/release-notes-{env}.md
-```
-
-```bash
-ai-release-notes generate --from v1.25.9 --to v1.28.0 --with mistral --env PROD
-# writes ./releases/release-notes-PROD.md
-```
-
-Use `{from}` and `{to}` to include the versions passed through `--from` and
-`--to` in the output filename. When either option is omitted, its placeholder
-is replaced with `start` or `end`, respectively:
-
-```yaml
-output:
-  - format: markdown
-    saveTo: ./RELEASE_NOTES_{env}_{from}_{to}.md
-```
-
-```bash
-ai-release-notes generate --from v1.25.9 --to v1.28.0 --with mistral --env PROD
-# writes ./RELEASE_NOTES_PROD_v1.25.9_v1.28.0.md
-```
-
-Use {lang} to write one file per configured language. It is replaced with the
-lowercased language code:
-
-```yaml
-output:
-  - format: markdown
-    saveTo: ./releases/release-notes-{env}-{lang}.md
-  - format: html
-    saveTo: ./releases/release-notes-{env}-{lang}.html
-```
-
-With prompt.languages: [en, fr] and --env PROD, this writes
-release-notes-PROD-en.* and release-notes-PROD-fr.*. A path without {lang}
-remains one combined multilingual release-history file.
-
-HTML release history is supported too. Set the format and use an `.html`
-file; each release is appended as a section in one valid HTML document:
-
-```yaml
-output:
-  - format: html
-    saveTo: ./releases/release-notes-{env}.html
-```
-
-To save Markdown and HTML in the same run, add a destination for each format:
-
-```yaml
-output:
-  - format: markdown
-    saveTo: ./releases/release-notes-{env}.md
-  - format: html
-    saveTo: ./releases/release-notes-{env}.html
-```
-
----
-
-## Instructions
-
-The `instructions` field lets you give detailed guidance to the LLM.
-
-### Inline instructions
-
-```yaml
-prompt:
-  instructions: |
-    ## Tone & Style
-    - Write in professional, concise English
-    - Use active voice
-
-    ## Content Rules
-    - Do NOT mention commit hashes
-    - Do NOT mention internal ticket IDs
-
-    ## Translation Examples
-    - "feat(auth): add OAuth2" → "Added OAuth2 authentication support"
-    - "fix(api): resolve race condition" → "Fixed a race condition in the API layer"
-```
-
-### File-based instructions
-
-`ai-release-notes init` creates an `.ai-release-instructions.md` file next
-to the config. The generated config keeps its file reference commented, so
-built-in instructions remain active until you opt in.
-
-```yaml
-prompt:
-  instructions:
-    file: ./.ai-release-instructions.md
-```
+For the exact configuration and comments, see the annotated
+[example `.ai-release-notes.yml`](examples/.ai-release-notes.yml). The
+[examples guide](examples/README.md) then walks through a first run, writing
+instructions, templates, and output layouts.
 
 ---
 

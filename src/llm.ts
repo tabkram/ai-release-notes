@@ -11,6 +11,15 @@ import { createMistral } from "@ai-sdk/mistral";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { ProviderName, ProviderConfig } from "./types.js";
 
+export interface LLMCallResult {
+  text: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+}
+
 /**
  * Environment variable names for each provider.
  */
@@ -50,11 +59,11 @@ export async function callLLM(
   config: ProviderConfig,
   system: string,
   user: string
-): Promise<string> {
+): Promise<LLMCallResult> {
   const apiKey = getApiKey(providerName);
   const model = createModel(providerName, config, apiKey);
 
-  const { text } = await generateText({
+  const { text, usage } = await generateText({
     model,
     system,
     prompt: user,
@@ -62,7 +71,14 @@ export async function callLLM(
     maxTokens: config.maxTokens ?? 4000,
   });
 
-  return text;
+  return {
+    text,
+    usage: {
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+    },
+  };
 }
 
 function createModel(

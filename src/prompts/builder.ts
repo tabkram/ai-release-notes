@@ -55,36 +55,21 @@ export async function buildSystemPrompt(config?: PromptConfig): Promise<string> 
     return config.system;
   }
 
-  // Otherwise build from config pieces
+  // Otherwise load the bundled prompt template and add project instructions.
   const language = config?.languages?.[0] || "en";
   const instructions = await resolveInstructions(config?.instructions);
+  const template = await readFile(
+    resolve(__dirname, "../../prompts/default-system.md"),
+    "utf-8"
+  );
 
   const instructionsBlock = instructions
     ? `\n\nAdditional instructions:\n${instructions}`
     : "";
 
-  return `You are a release notes writer.
-
-Your goal: Transform technical changelog entries into clean, business-readable release notes.
-
-Language: ${language}
-
-Output structure:
-- Features
-- Improvements
-- Bug Fixes
-- Technical
-
-Guidelines:
-- Do NOT mention commit hashes.
-- Do NOT mention internal ticket IDs.
-- Keep sentences concise.
-- Group by domain.
-- Preserve chronological order.
-- Never create fake features.
-- If a release contains only fixes, do not create a features section.
-- Use bullet points.${instructionsBlock}
-`;
+  return template
+    .replaceAll("{{language}}", language)
+    .trim() + instructionsBlock + "\n";
 }
 
 /**

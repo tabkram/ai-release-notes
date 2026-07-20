@@ -102,3 +102,28 @@ export async function getPreviousTag(
     return null;
   }
 }
+
+/**
+ * Get a tag's creation date. For lightweight tags, Git exposes the tagged
+ * commit's date because lightweight tags do not have their own timestamp.
+ */
+export async function getTagCreationDate(
+  tag: string,
+  repoPath?: string
+): Promise<Date | null> {
+  const git: SimpleGit = simpleGit(repoPath || process.cwd());
+  try {
+    const output = await git.raw([
+      "for-each-ref",
+      `refs/tags/${tag}`,
+      "--format=%(creatordate:iso-strict)",
+    ]);
+    const value = output.trim().split("\n", 1)[0];
+    if (!value) return null;
+
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  } catch {
+    return null;
+  }
+}

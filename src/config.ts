@@ -121,9 +121,7 @@ prompt:
   languages:
     - en
 
-  # Optional: uncomment to customize the built-in release-note instructions.
-  # The file is created by ai-release-notes init, but is not used until
-  # this reference is uncommented.
+  # Optional: create this file and uncomment these lines to add project rules.
   # instructions:
   #   file: ./.ai-release-instructions.md
 
@@ -133,38 +131,17 @@ prompt:
 
 output:
   - format: markdown
-    saveTo: ./RELEASE_NOTES.md
+    saveTo: ./releases/RELEASE_NOTES_{env}_{from}_{to}.md
+
+# A release index is created or updated after every generation.
+outputIndex:
+  format: markdown
+  saveTo: ./releases/RELEASE_INDEX_{env}.md
+  # Optional: create this file and uncomment to customize the index layout.
+  # template: ./.ai-output-index-template.md
 `;
 
   await writeFile(targetPath, defaultConfig, "utf-8");
-
-  const instructionsPath = resolve(dirname(targetPath), ".ai-release-instructions.md");
-  if (!existsSync(instructionsPath)) {
-    const defaultInstructions = `# AI Release Notes Instructions
-
-<!--
-This optional file is created by ai-release-notes init.
-
-It does not affect generated release notes until you uncomment this in
-.ai-release-notes.yml:
-
-prompt:
-  instructions:
-    file: ./.ai-release-instructions.md
--->
-
-Use this file for all release-note guidance that is specific to your project.
-For example:
-
-- Preserve product names and technical vocabulary such as API, endpoint,
-  dashboard, and webhook.
-- Use these sections when they contain relevant changes: 🚀 New Features,
-  ✨ Improvements, 🐛 Bug Fixes, and ⚙️ Technical.
-- Do not mention commit hashes or internal ticket IDs.
-- Keep sentences concise and group related changes by domain.
-`;
-    await writeFile(instructionsPath, defaultInstructions, "utf-8");
-  }
 }
 
 // ─────────────────────────────────────────
