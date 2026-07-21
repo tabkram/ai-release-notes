@@ -5,7 +5,7 @@
 
 import { Command } from "commander";
 import chalk from "chalk";
-import { generate } from "../generator.js";
+import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
 import { markdownToHtml } from "../release.js";
 import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
@@ -15,7 +15,7 @@ import { existsSync } from "fs";
 import { resolve, join, dirname, relative } from "path";
 import clipboardy from "clipboardy";
 import ora from "ora";
-import type { ProviderConfig, ProviderName } from "../types.js";
+import type { GenerateResult, ProviderConfig, ProviderName, ReleaseNotesConfig } from "../types.js";
 import { AI_RELEASE_NOTES_VERSION } from "../version.js";
 
 const CLI_VERSION = AI_RELEASE_NOTES_VERSION;
@@ -43,6 +43,74 @@ function printStatus(stdout: boolean, message: string): void {
     return;
   }
   console.log(message);
+}
+
+function printVerboseGenerationDetails(
+  stdout: boolean,
+  config: ReleaseNotesConfig,
+  result: GenerateResult,
+  dryRun: boolean
+): void {
+  const languages = config.prompt?.languages || ["en"];
+  const instructions = config.prompt?.instructions;
+  const instructionSource = !instructions
+    ? "built-in defaults"
+    : typeof instructions === "string"
+      ? "inline configuration"
+      : `file ${instructions.file}`;
+
+  printStatus(stdout, chalk.gray("\n🧭 Generation details"));
+  printStatus(stdout, chalk.gray(`   Main language: ${languages[0]}`));
+  printStatus(stdout, chalk.gray(`   Instructions: ${instructionSource}`));
+  if (languages.length > 1) {
+    const mode = dryRun ? "configured" : "completed";
+    printStatus(
+      stdout,
+      chalk.gray(`   Translations ${mode}: ${languages[0]} → ${languages.slice(1).join(", ")} (translation only; facts and structure are preserved)`)
+    );
+  }
+  printStatus(stdout, chalk.gray(`   Provider: ${result.metadata.provider} | Model calls: ${result.metadata.usage.modelCalls}`));
+}
+
+function printGenerationSummary(stdout: boolean, result: Pick<GenerateResult, "metadata">): void {
+  const usage = result.metadata.usage;
+  printStatus(stdout, chalk.gray(
+    `\n📊 ${result.metadata.commitCount} commits | ${result.metadata.provider} | ${result.metadata.date} | ${formatDuration(usage.durationMs)}`
+  ));
+  if (usage.modelCalls > 0) {
+    printStatus(stdout, chalk.gray(
+      `🪙 Tokens: ${formatNumber(usage.inputTokens)} input + ${formatNumber(usage.outputTokens)} output = ${formatNumber(usage.totalTokens)} | ${usage.modelCalls} model call${usage.modelCalls === 1 ? "" : "s"}`
+    ));
+  } else {
+    printStatus(stdout, chalk.gray("🪙 Tokens: no model tokens used (dry run)"));
+  }
+  if (result.metadata.contextFiles && result.metadata.contextFiles.length > 0) {
+    printStatus(stdout, chalk.gray(`📎 Context files: ${result.metadata.contextFiles.join(", ")}`));
+  }
+}
+
+function formatGenerationError(
+  error: unknown,
+  result?: Pick<GenerateResult, "metadata">,
+  config?: ReleaseNotesConfig,
+  providerOverride?: ProviderName
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/rate limit|too many requests|\b429\b|quota/i.test(message)) {
+    return message;
+  }
+
+  const provider = result?.metadata.provider || providerOverride;
+  const model = provider ? config?.providers[provider]?.model : undefined;
+  const target = [provider, model].filter(Boolean).join(" / ") || "the selected provider";
+
+  return [
+    `Rate limit reached for ${target}.`,
+    "The provider rejected another API request because the active API key/account exceeded a request-rate or token-throughput quota.",
+    "This is not a limit on the number of commits or context files in this release.",
+    "The provider did not include the exact quota or reset time in this error; wait briefly, reduce the prompt/context or number of generated languages, or use an API key/account with more capacity.",
+    `Provider error: ${message}`,
+  ].join("\n");
 }
 
 program
@@ -93,9 +161,13 @@ program
   .option("--changelog <path>", "Path to a file containing raw changelog (skip git)")
   .option("--context <paths...>", "Context files or directories (specs, models, etc.)")
   .option("--dry-run", "Show prompts without calling LLM")
+  .option("-v, --verbose", "Show applied instructions and generation steps")
   .option("--stdout", "Write generated release notes to the terminal without saving files")
   .option("--clipboard", "Copy result to clipboard")
   .action(async (opts) => {
+    let result: GenerateResult | undefined;
+    let config: ReleaseNotesConfig | undefined;
+    let summaryPrinted = false;
     try {
       // Auto-detect tags if not provided
       let fromVersion = opts.from;
@@ -119,9 +191,11 @@ program
         printStatus(opts.stdout, chalk.blue(`📌 Detected previous tag: ${fromVersion}`));
       }
 
+      const loadedConfig = await loadConfig(opts.config);
+      config = loadedConfig;
       const spinner = ora("🤖 Generating release notes...").start();
 
-      const result = await generate({
+      const generatedResult = await generate({
         fromVersion,
         toVersion,
         environment: opts.env,
@@ -137,32 +211,36 @@ program
         template: opts.template,
         context: opts.context,
       });
+      result = generatedResult;
 
       spinner.succeed("✅ Done!");
 
+      if (opts.verbose) {
+        printVerboseGenerationDetails(opts.stdout, loadedConfig, generatedResult, opts.dryRun);
+      }
+
       if (opts.stdout) {
-        console.log(result.markdown);
+        console.log(generatedResult.markdown);
       }
 
       // Determine output path
       let outputTargets: OutputTarget[] = !opts.stdout && opts.output
-        ? [{ path: opts.output, markdown: result.markdown, html: result.html, format: opts.format }]
+        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format }]
         : [];
       if (!opts.stdout && outputTargets.length === 0 && opts.outputDir) {
         const ext = opts.format === "html" ? "html" : "md";
         const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${ext}`;
-        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: result.markdown, html: result.html, format: opts.format }];
+        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format }];
       }
 
-      const config = await loadConfig(opts.config);
       if (!opts.stdout && outputTargets.length === 0) {
-        if (config.output) {
-          const outputConfigs = Array.isArray(config.output) ? config.output : [config.output];
+        if (loadedConfig.output) {
+          const outputConfigs = Array.isArray(loadedConfig.output) ? loadedConfig.output : [loadedConfig.output];
           outputTargets = outputConfigs.flatMap((output) => {
             if (!output.saveTo) return [];
             const saveTo = Array.isArray(output.saveTo) ? output.saveTo : [output.saveTo];
             return saveTo.flatMap((path) => path.includes("{lang}")
-              ? result.localized.map((release) => ({
+              ? generatedResult.localized.map((release) => ({
                   path: getOutputPath(path, opts.env, release.language, opts.from, opts.to),
                   markdown: release.markdown,
                   html: release.html,
@@ -171,8 +249,8 @@ program
                 }))
               : [{
                   path: getOutputPath(path, opts.env, undefined, opts.from, opts.to),
-                  markdown: result.markdown,
-                  html: result.html,
+                  markdown: generatedResult.markdown,
+                  html: generatedResult.html,
                   format: output.format,
                 }]
             );
@@ -180,12 +258,12 @@ program
         }
       }
 
-      const outputIndexConfigs = config.outputIndex
-        ? (Array.isArray(config.outputIndex) ? config.outputIndex : [config.outputIndex])
+      const outputIndexConfigs = loadedConfig.outputIndex
+        ? (Array.isArray(loadedConfig.outputIndex) ? loadedConfig.outputIndex : [loadedConfig.outputIndex])
         : [];
       const outputIndexTargets: OutputIndexTarget[] = outputIndexConfigs.flatMap((outputIndex) =>
         outputIndex.saveTo.includes("{lang}")
-          ? result.localized.map((release) => ({
+          ? generatedResult.localized.map((release) => ({
               path: resolve(getOutputPath(outputIndex.saveTo, opts.env, release.language, opts.from, opts.to)),
               language: release.language,
               format: outputIndex.format,
@@ -232,10 +310,10 @@ program
                   const translated = await translateOutputIndexTemplate(
                     template,
                     index.language!,
-                    result.metadata.provider as ProviderName,
-                    config.providers[result.metadata.provider] as ProviderConfig
+                    generatedResult.metadata.provider as ProviderName,
+                    loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
                   );
-                  addTemplateUsage(result.metadata.usage, translated.usage);
+                  addTemplateUsage(generatedResult.metadata.usage, translated.usage);
                   return translated.text;
               }
               : undefined,
@@ -247,10 +325,10 @@ program
                   if (!translated) {
                     translated = translateOutputIndexCopy(
                       language,
-                      result.metadata.provider as ProviderName,
-                      config.providers[result.metadata.provider] as ProviderConfig
+                      generatedResult.metadata.provider as ProviderName,
+                      loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
                     ).then(({ copy, usage }) => {
-                      addTemplateUsage(result.metadata.usage, usage);
+                      addTemplateUsage(generatedResult.metadata.usage, usage);
                       return copy;
                     });
                     translatedCopyCache.set(key, translated);
@@ -258,12 +336,12 @@ program
                   return translated;
                 }
               : undefined,
-            projectName: config.projectName,
+            projectName: loadedConfig.projectName,
             environment: opts.env,
             language: index.language,
             fromVersion,
             toVersion,
-            date: result.metadata.date,
+            date: generatedResult.metadata.date,
             releasePaths,
           });
           await writeFile(index.path, outputIndexContent, "utf-8");
@@ -273,28 +351,23 @@ program
 
       // Clipboard
       if (opts.clipboard) {
-        await clipboardy.write(result.markdown);
+        await clipboardy.write(generatedResult.markdown);
         printStatus(opts.stdout, chalk.blue("📋 Copied to clipboard"));
       }
 
       // Metadata
-      const usage = result.metadata.usage;
-      printStatus(opts.stdout, chalk.gray(
-        `\n📊 ${result.metadata.commitCount} commits | ${result.metadata.provider} | ${result.metadata.date} | ${formatDuration(usage.durationMs)}`
-      ));
-      if (usage.modelCalls > 0) {
-        printStatus(opts.stdout, chalk.gray(
-          `🪙 Tokens: ${formatNumber(usage.inputTokens)} input + ${formatNumber(usage.outputTokens)} output = ${formatNumber(usage.totalTokens)} | ${usage.modelCalls} model call${usage.modelCalls === 1 ? "" : "s"}`
-        ));
-      } else {
-        printStatus(opts.stdout, chalk.gray("🪙 Tokens: no model tokens used (dry run)"));
-      }
-      if (result.metadata.contextFiles && result.metadata.contextFiles.length > 0) {
-        printStatus(opts.stdout, chalk.gray(`📎 Context files: ${result.metadata.contextFiles.join(", ")}`));
-      }
+      printGenerationSummary(opts.stdout, generatedResult);
+      summaryPrinted = true;
 
     } catch (err: any) {
-      console.error(chalk.red("\n❌ Error:"), err.message);
+      const partialResult = result || (err instanceof GenerationError ? { metadata: err.metadata } : undefined);
+      if (partialResult && !summaryPrinted) {
+        printGenerationSummary(opts.stdout, partialResult);
+      }
+      const providerOverride = config
+        ? (opts.with ? resolveProviderAlias(opts.with) : config.provider as ProviderName)
+        : undefined;
+      console.error(chalk.red("\n❌ Error:"), formatGenerationError(err, partialResult, config, providerOverride));
       process.exit(1);
     }
   });

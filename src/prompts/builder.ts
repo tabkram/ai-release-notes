@@ -33,16 +33,14 @@ export async function buildTranslationSystemPrompt(
   instructions?: string
 ): Promise<string> {
   const template = await readFile(
-    resolve(__dirname, "../../prompts/translation-system.md"),
+    resolve(__dirname, "../../prompts/release-notes-translation-system.md"),
     "utf-8"
   );
-  const projectInstructions = instructions
-    ? "\n\nProject instructions to preserve:\n" + instructions
-    : "";
+  const translationInstructions = instructions || "No additional project instructions were supplied.";
 
   return template
     .replaceAll("{{language}}", language)
-    .replaceAll("{{projectInstructions}}", projectInstructions)
+    .replaceAll("{{instructions}}", translationInstructions)
     .trim();
 }
 
@@ -50,26 +48,28 @@ export async function buildTranslationSystemPrompt(
  * Build the system prompt from config or use a default.
  */
 export async function buildSystemPrompt(config?: PromptConfig): Promise<string> {
-  // If user provided a custom system prompt, use it directly
+  const instructionOverride = await resolveInstructions(config?.instructions);
+  const instructions = instructionOverride || await readFile(
+    resolve(__dirname, "../../prompts/release-notes-instructions.md"),
+    "utf-8"
+  );
+
+  // A custom system prompt still receives either the override or built-in rules.
   if (config?.system) {
-    return config.system;
+    return config.system.trim() + "\n\n" + instructions.trim() + "\n";
   }
 
   // Otherwise load the bundled prompt template and add project instructions.
   const language = config?.languages?.[0] || "en";
-  const instructions = await resolveInstructions(config?.instructions);
   const template = await readFile(
-    resolve(__dirname, "../../prompts/default-system.md"),
+    resolve(__dirname, "../../prompts/release-notes-system.md"),
     "utf-8"
   );
 
-  const instructionsBlock = instructions
-    ? `\n\nAdditional instructions:\n${instructions}`
-    : "";
-
   return template
     .replaceAll("{{language}}", language)
-    .trim() + instructionsBlock + "\n";
+    .replaceAll("{{instructions}}", instructions.trim())
+    .trim() + "\n";
 }
 
 /**

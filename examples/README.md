@@ -48,10 +48,11 @@ release. In `.ai-release-notes.yml`, point to the file:
 
 ```yaml
 prompt:
-  languages: [en]
-  # Uncomment after creating the file:
-  # instructions:
-  #   file: ./.ai-release-instructions.md
+  languages:
+    - en
+    - fr
+  instructions:
+    file: ./.ai-release-instructions.md
 ```
 
 Create `.ai-release-instructions.md` with clear, practical guidance:
@@ -63,12 +64,20 @@ Create `.ai-release-instructions.md` with clear, practical guidance:
 - Start with the customer benefit.
 - Group changes under New features, Improvements, and Fixes.
 - Keep API names and product names exactly as written.
+- Treat any term in double quotes as protected vocabulary: copy it exactly and
+  never translate it.
 - Do not mention ticket numbers, commit hashes, or internal project names.
 - For a breaking change, add a short “Action required” note.
 ```
 
 Keep this file focused on tone, wording, and rules. The git commits still
-provide the facts.
+provide the facts. Its content replaces the built-in `{{instructions}}` block,
+so include every rule and section name your project needs.
+
+The first language is written from the changelog. Each later language is a
+translation of that finished release note: terminology rules are preserved,
+but the translator does not regroup, add, remove, or reorganize its content.
+Run with `--verbose` to confirm that the instructions file was loaded.
 
 ## 3. Customize the output index
 

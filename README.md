@@ -46,7 +46,7 @@ export GOOGLE_API_KEY=...
 
 You don't need to set all of them. Just the one you'll use.
 
-> **New to API keys?** See [How to get API keys](#how-to-get-api-keys) below for step-by-step guides for each provider.
+> **New to API keys?** See the [API keys summary](#api-keys) for the provider you need, or open its linked setup guide.
 
 ### 2. Initialize configuration
 
@@ -79,6 +79,8 @@ npx ai-release-notes generate --from v1.25.9 --to v1.28.0 --with mistral --env P
 ```
 
 `--dry-run` is different: it shows the prompt without calling the AI provider.
+Use `--verbose` to see the instruction source, main language, and configured
+translation steps. It reports execution details, not private model reasoning.
 
 After a generation, the command shows the provider-reported input, output,
 and total token counts, together with the number of model calls and elapsed
@@ -86,103 +88,18 @@ time. Translated releases include every translation call in these totals.
 
 ---
 
-## How to Get API Keys
-
-### OpenAI
-
-1. Go to [platform.openai.com](https://platform.openai.com)
-2. Sign up or log in
-3. Add a payment method under **Settings > Billing**
-4. Go to **API Keys** and click **Create new secret key**
-5. Copy the key (shown only once!)
-6. Set it as environment variable: `export OPENAI_API_KEY=sk-...`
-
-📖 [Full guide: OpenAI API Key](https://platform.openai.com/api-keys)
-
----
-
-### Anthropic (Claude)
-
-1. Go to [console.anthropic.com](https://console.anthropic.com)
-2. Sign up or log in
-3. Go to **API Keys** in the sidebar
-4. Click **Create Key**
-5. Give it a name and copy the key
-6. Set it as environment variable: `export ANTHROPIC_API_KEY=sk-ant-...`
-
-📖 [Full guide: Anthropic API Keys](https://docs.anthropic.com/en/api/getting-started)
-
----
-
-### Mistral
-
-1. Go to [console.mistral.ai](https://console.mistral.ai)
-2. Sign up or log in
-3. Go to **API Keys** in the sidebar
-4. Click **Create API Key**
-5. Copy the key
-6. Set it as environment variable: `export MISTRAL_API_KEY=...`
-
-📖 [Full guide: Mistral API](https://docs.mistral.ai/getting-started/quickstart/)
-
----
-
-### Google (Gemini)
-
-1. Go to [Google AI Studio](https://aistudio.google.com)
-2. Sign in with your Google account
-3. Click **Get API Key** in the sidebar
-4. Select or create a Google Cloud project
-5. Click **Create API Key**
-6. Copy the key
-7. Set it as environment variable: `export GOOGLE_API_KEY=...`
-
-📖 [Full guide: Gemini API - Getting Started](https://ai.google.dev/gemini-api/docs/get-started)
-
-> **Note:** Google is transitioning from standard API keys to authorized keys. New keys created in AI Studio are automatically authorized keys. citeweb_search:29#3
-
----
-
-### Azure OpenAI
-
-1. Go to [Azure Portal](https://portal.azure.com)
-2. Create an **Azure OpenAI** resource
-3. Once deployed, go to **Keys and Endpoint** in the sidebar
-4. Copy **Key 1** or **Key 2**
-5. Set it as environment variable: `export AZURE_OPENAI_API_KEY=...`
-6. Also set your endpoint: `export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/`
-
-📖 [Full guide: Azure OpenAI - Create and deploy](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/create-resource)
-
----
-
-### Ollama (Local, no API key needed!)
-
-Ollama runs entirely on your machine — **no cloud API key required**.
-
-1. Install Ollama: [ollama.com/download](https://ollama.com/download)
-2. Pull a model: `ollama pull llama3.1`
-3. Start Ollama (runs on `http://localhost:11434`)
-4. Use `ai-release-notes` with `--with ollama`
-
-📖 [Full guide: Ollama Documentation](https://github.com/ollama/ollama)
-
-> **Optional:** If you use Ollama Cloud (hosted), set `OLLAMA_API_KEY=sk-...`. For local usage, no key is needed. citeweb_search:29#4
-
----
-
-## API Keys Summary
+## API Keys
 
 API keys are **never** stored in config files. Only the key for the **active provider** is read from environment variables at runtime.
 
-| Provider | Environment Variable | Required if using... | How to get |
-|----------|---------------------|----------------------|------------|
-| OpenAI | `OPENAI_API_KEY` | `--with gpt4`, `--with gpt`, or default | [platform.openai.com](https://platform.openai.com/api-keys) citeweb_search:29#5 |
-| Anthropic | `ANTHROPIC_API_KEY` | `--with claude` | [console.anthropic.com](https://console.anthropic.com) |
-| Mistral | `MISTRAL_API_KEY` | `--with mistral` | [console.mistral.ai](https://console.mistral.ai) |
-| Google | `GOOGLE_API_KEY` | `--with gemini` | [Google AI Studio](https://aistudio.google.com) citeweb_search:29#2 |
-| Azure OpenAI | `AZURE_OPENAI_API_KEY` | `--with azure` | [Azure Portal](https://portal.azure.com) citeweb_search:29#6 |
-| Ollama | `OLLAMA_API_KEY` | `--with ollama` | Not needed for local use |
+| Provider | Environment variable | Required when using | Setup guide |
+|----------|----------------------|---------------------|-------------|
+| OpenAI | `OPENAI_API_KEY` | `--with gpt4`, `--with gpt`, or default | [Get an OpenAI key](docs/api-keys.md#openai) |
+| Anthropic | `ANTHROPIC_API_KEY` | `--with claude` | [Get an Anthropic key](docs/api-keys.md#anthropic-claude) |
+| Mistral | `MISTRAL_API_KEY` | `--with mistral` | [Get a Mistral key](docs/api-keys.md#mistral) |
+| Google | `GOOGLE_API_KEY` | `--with gemini` | [Get a Google key](docs/api-keys.md#google-gemini) |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` | `--with azure` | [Get Azure credentials](docs/api-keys.md#azure-openai) |
+| Ollama | None for local use; optional `OLLAMA_API_KEY` for Ollama Cloud | `--with ollama` | [Set up Ollama](docs/api-keys.md#ollama) |
 
 ### Setting environment variables
 
@@ -230,6 +147,7 @@ dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env 
 | `--changelog <path>` | Raw changelog file (skip git) |
 | `--context <paths...>` | Context files or directories (mixed) |
 | `--dry-run` | Show prompts without calling LLM |
+| `-v, --verbose` | Show applied instructions and generation steps |
 | `--stdout` | Write generated Markdown to standard output without saving files or indexes |
 | `--clipboard` | Copy result to clipboard |
 
@@ -262,7 +180,8 @@ The main parts are simple:
 - `provider` chooses the AI provider; `providers` lets you set its model and
   generation options.
 - `prompt` selects the release languages and can point to an instructions file
-  when your team has writing rules.
+  when your team has writing rules. Its content replaces the built-in release
+  instructions through the `{{instructions}}` section.
 - `output` lists the Markdown and/or HTML release files to create. Use
   `{env}`, `{lang}`, `{from}`, and `{to}` in their names. Missing `--from` and
   `--to` become `start` and `end`.

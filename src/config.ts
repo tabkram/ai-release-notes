@@ -54,7 +54,14 @@ export async function loadConfig(
     );
   }
 
-  return result.data;
+  const config = result.data;
+  const instructions = config.prompt?.instructions;
+  if (instructions && typeof instructions !== "string") {
+    // A config remains portable when its related files are resolved beside it.
+    instructions.file = resolve(dirname(configPath), instructions.file);
+  }
+
+  return config;
 }
 
 /**

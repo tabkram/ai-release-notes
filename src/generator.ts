@@ -18,6 +18,13 @@ import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve } from "path";
 
+export class GenerationError extends Error {
+  constructor(message: string, public readonly metadata: GenerateResult["metadata"]) {
+    super(message);
+    this.name = "GenerationError";
+  }
+}
+
 /**
  * Generate release notes from git tags.
  * Main entry point for programmatic usage.
@@ -115,33 +122,53 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     modelCalls: 0,
     durationMs: 0,
   };
-  const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt);
-  addUsage(usage, llmResult.usage);
-
-  // ── Format output ──
-  const primaryMarkdown = formatReleaseNote(llmResult.text, {
+  const errorMetadata = {
     fromVersion: options.fromVersion,
     toVersion: options.toVersion,
     environment: options.environment,
     date,
-    projectName: config.projectName,
-  });
+    provider: providerName,
+    commitCount: parsedCommits.length,
+    contextFiles: contextFiles.map((cf) => cf.path),
+    usage,
+  };
+  let primaryMarkdown = "";
+  const translatedReleases: GenerateResult["localized"] = [];
+  try {
+    const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt);
+    addUsage(usage, llmResult.usage);
+    primaryMarkdown = formatReleaseNote(llmResult.text, {
+      fromVersion: options.fromVersion,
+      toVersion: options.toVersion,
+      environment: options.environment,
+      date,
+      projectName: config.projectName,
+    });
+
+    const translationInstructions = await resolveInstructions(config.prompt?.instructions);
+    for (const language of (config.prompt?.languages || ["en"]).slice(1)) {
+      const translatedRelease = await callLLM(
+        providerName,
+        providerConfig,
+        await buildTranslationSystemPrompt(language, translationInstructions),
+        primaryMarkdown
+      );
+      addUsage(usage, translatedRelease.usage);
+      translatedReleases.push({ language, markdown: translatedRelease.text.trim() });
+    }
+  } catch (error) {
+    usage.durationMs = Date.now() - startedAt;
+    throw new GenerationError(
+      error instanceof Error ? error.message : String(error),
+      errorMetadata
+    );
+  }
+
+  // ── Format output ──
   const localized = [{
     language: config.prompt?.languages?.[0] || "en",
     markdown: primaryMarkdown,
-  }];
-
-  const translationInstructions = await resolveInstructions(config.prompt?.instructions);
-  for (const language of (config.prompt?.languages || ["en"]).slice(1)) {
-    const translatedRelease = await callLLM(
-      providerName,
-      providerConfig,
-      await buildTranslationSystemPrompt(language, translationInstructions),
-      primaryMarkdown
-    );
-    addUsage(usage, translatedRelease.usage);
-    localized.push({ language, markdown: translatedRelease.text.trim() });
-  }
+  }, ...translatedReleases];
   const markdown = localized
     .map((release, index) => index === 0
       ? release.markdown
