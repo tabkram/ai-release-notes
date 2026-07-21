@@ -26,27 +26,44 @@ npm install ai-release-notes
 
 ## Quick Start
 
-### 1. Set your API key (only the one you need)
+### 1. Providers and API Keys
 
-You only need **one** API key — the one matching the provider you want to use.
+API keys are **never** stored in config files. Only the key for the active provider is read from environment variables at runtime.
 
+| Provider | CLI alias | Environment variable | Default models | Setup guide |
+|----------|-----------|----------------------|----------------|-------------|
+| OpenAI | `gpt4`, `gpt`, or default | `OPENAI_API_KEY` | GPT-4o, GPT-4o-mini | [Get an OpenAI key](docs/api-keys.md#openai) |
+| Anthropic | `claude` | `ANTHROPIC_API_KEY` | Claude 3.5 Sonnet, Claude 3 Opus | [Get an Anthropic key](docs/api-keys.md#anthropic-claude) |
+| Mistral | `mistral` | `MISTRAL_API_KEY` | Mistral Large, Mistral Medium | [Get a Mistral key](docs/api-keys.md#mistral) |
+| Google | `gemini` | `GOOGLE_API_KEY` | Gemini 1.5 Pro, Gemini 1.5 Flash | [Get a Google key](docs/api-keys.md#google-gemini) |
+| Azure OpenAI | `azure` | `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` | GPT-4o via Azure | [Get Azure credentials](docs/api-keys.md#azure-openai) |
+| Ollama | `ollama` | None for local use; optional `OLLAMA_API_KEY` for Ollama Cloud | Local models, including Llama and Mistral | [Set up Ollama](docs/api-keys.md#ollama) |
+
+#### Setting environment variables
+
+**macOS / Linux:**
 ```bash
-# If you use OpenAI (default)
 export OPENAI_API_KEY=sk-...
-
-# If you use Anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# If you use Mistral
-export MISTRAL_API_KEY=...
-
-# If you use Google
-export GOOGLE_API_KEY=...
 ```
 
-You don't need to set all of them. Just the one you'll use.
+**Windows (PowerShell):**
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+```
 
-> **New to API keys?** See the [API keys summary](#api-keys) for the provider you need, or open its linked setup guide.
+**Windows (CMD):**
+```cmd
+set OPENAI_API_KEY=sk-...
+```
+
+**`.env` file (with dotenv):**
+```bash
+# Install dotenv-cli
+npm install -g dotenv-cli
+
+# Run with env file
+dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD
+```
 
 ### 2. Initialize configuration
 
@@ -86,49 +103,6 @@ After a generation, the command shows the provider-reported input, output,
 and total token counts, together with the number of model calls and elapsed
 time. Translated releases include every translation call in these totals.
 
----
-
-## API Keys
-
-API keys are **never** stored in config files. Only the key for the **active provider** is read from environment variables at runtime.
-
-| Provider | Environment variable | Required when using | Setup guide |
-|----------|----------------------|---------------------|-------------|
-| OpenAI | `OPENAI_API_KEY` | `--with gpt4`, `--with gpt`, or default | [Get an OpenAI key](docs/api-keys.md#openai) |
-| Anthropic | `ANTHROPIC_API_KEY` | `--with claude` | [Get an Anthropic key](docs/api-keys.md#anthropic-claude) |
-| Mistral | `MISTRAL_API_KEY` | `--with mistral` | [Get a Mistral key](docs/api-keys.md#mistral) |
-| Google | `GOOGLE_API_KEY` | `--with gemini` | [Get a Google key](docs/api-keys.md#google-gemini) |
-| Azure OpenAI | `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` | `--with azure` | [Get Azure credentials](docs/api-keys.md#azure-openai) |
-| Ollama | None for local use; optional `OLLAMA_API_KEY` for Ollama Cloud | `--with ollama` | [Set up Ollama](docs/api-keys.md#ollama) |
-
-### Setting environment variables
-
-**macOS / Linux:**
-```bash
-export OPENAI_API_KEY=sk-...
-```
-
-**Windows (PowerShell):**
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-```
-
-**Windows (CMD):**
-```cmd
-set OPENAI_API_KEY=sk-...
-```
-
-**`.env` file (with dotenv):**
-```bash
-# Install dotenv-cli
-npm install -g dotenv-cli
-
-# Run with env file
-dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD
-```
-
----
-
 ## CLI Options
 
 | Option | Description |
@@ -138,7 +112,7 @@ dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env 
 | `--env <env>` | **Required.** Environment name (PROD, STAGING, etc.) |
 | `--release-date <value>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
 | `--date <value>` | Alias for `--release-date` |
-| `--with <provider>` | LLM override: `claude`, `gpt4`, `mistral`, `gemini`, `ollama` |
+| `--with <provider>` | LLM override; see [provider aliases](#1-providers-and-api-keys) |
 | `--config <path>` | Path to config file |
 | `--output <path>` | Output file path (overrides `output.saveTo`) |
 | `--output-dir <dir>` | Output directory (auto-names the file) |
@@ -229,19 +203,6 @@ const result = await generate({
 console.log(result.markdown);
 console.log(result.html);
 ```
-
----
-
-## Supported Providers
-
-| Alias | Provider | Env Var | Models |
-|-------|----------|---------|--------|
-| `claude` | Anthropic | `ANTHROPIC_API_KEY` | Claude 3.5 Sonnet, Claude 3 Opus |
-| `gpt4` / `gpt` | OpenAI | `OPENAI_API_KEY` | GPT-4o, GPT-4o-mini |
-| `mistral` | Mistral | `MISTRAL_API_KEY` | Mistral Large, Mistral Medium |
-| `gemini` | Google | `GOOGLE_API_KEY` | Gemini 1.5 Pro, Gemini 1.5 Flash |
-| `ollama` | Ollama | `OLLAMA_API_KEY` | Llama 3, Mistral, CodeLlama (local) |
-| `azure` | Azure OpenAI | `AZURE_OPENAI_API_KEY` | GPT-4o via Azure |
 
 ---
 
