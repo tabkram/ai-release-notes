@@ -108,7 +108,7 @@ export const OutputIndexesConfigSchema = z.union([
 export const ReleaseNotesConfigSchema = z.object({
   projectName: z.string().min(1).optional(),
   provider: z.string().default("openai"),
-  providers: z.record(ProviderConfigSchema),
+  providers: z.record(z.string(), ProviderConfigSchema),
   prompt: PromptConfigSchema.optional(),
   git: GitConfigSchema.optional(),
   output: OutputsConfigSchema.optional(),

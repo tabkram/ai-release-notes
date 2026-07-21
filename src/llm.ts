@@ -68,15 +68,15 @@ export async function callLLM(
     system,
     prompt: user,
     temperature: config.temperature ?? 0.3,
-    maxTokens: config.maxTokens ?? 4000,
+    maxOutputTokens: config.maxTokens ?? 4000,
   });
 
   return {
     text,
     usage: {
-      inputTokens: usage.promptTokens,
-      outputTokens: usage.completionTokens,
-      totalTokens: usage.totalTokens,
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+      totalTokens: usage.totalTokens ?? 0,
     },
   };
 }
