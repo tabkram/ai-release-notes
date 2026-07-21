@@ -280,6 +280,19 @@ jobs:
 
 ---
 
-## License
+## Contributing 🤝
 
-MIT
+If you find any issues or have suggestions for improvement, feel free to open an issue or submit a pull request.
+Contributions are welcome!
+
+Before getting started, please read our [Contribution Guidelines](CONTRIBUTING.md).
+
+This project is governed by the [Code of Conduct](CODE_OF_CONDUCT.md); security issues should follow the [Security Policy](security.md).
+
+## Community 👥
+
+Love `ai-release-note` ? Give our repo a star ⭐ ⬆️.
+
+## License 📄
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
