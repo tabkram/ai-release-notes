@@ -3,5 +3,13 @@ dist/
 *.log
 .env
 .DS_Store
+report.**.json
 coverage/
+reports/
 *.tgz
+
+
+*.iml
+.idea
+.idea/**
+

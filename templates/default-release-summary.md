@@ -2,6 +2,8 @@
 
 A concise release history for {{environment}}. The newest release is listed first.
 
+{{languages}}
+
 <!-- ai-release-notes:releases -->
 {{releases}}
 

@@ -4,6 +4,88 @@
 
 import { AI_RELEASE_NOTES_VERSION } from "./version.js";
 
+const OUTPUT_INDEX_LANGUAGES_MARKER = "<!-- ai-release-notes:languages -->";
+const OUTPUT_INDEX_LANGUAGES_END_MARKER = "<!-- ai-release-notes:/languages -->";
+
+export interface OutputIndexLanguageLink {
+  language: string;
+  href: string;
+  active: boolean;
+}
+
+/** Render links between the localized variants of an output index. */
+export function renderOutputIndexLanguageSwitcher(
+  format: "markdown" | "html",
+  links: OutputIndexLanguageLink[]
+): string {
+  const uniqueLinks = links.filter((link, index) =>
+    links.findIndex((candidate) => candidate.language === link.language) === index
+  );
+  if (uniqueLinks.length < 2) {
+    return `${OUTPUT_INDEX_LANGUAGES_MARKER}\n${OUTPUT_INDEX_LANGUAGES_END_MARKER}`;
+  }
+
+  const options = uniqueLinks.map((link) => {
+    const label = link.language.toUpperCase();
+    const href = link.href.replaceAll("(", "%28").replaceAll(")", "%29");
+    if (format === "html") {
+      return link.active
+        ? `  <span class="language-option is-active" aria-current="page">${escapeHtml(label)}</span>`
+        : `  <a class="language-option" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+    }
+    return link.active
+      ? `**${escapeMarkdownLabel(label)}**`
+      : `[${escapeMarkdownLabel(label)}](${href})`;
+  });
+
+  const selector = format === "html"
+    ? `<nav class="language-switcher" aria-label="Languages">\n${options.join("\n")}\n</nav>`
+    : options.join(" · ");
+
+  return `${OUTPUT_INDEX_LANGUAGES_MARKER}\n${selector}\n${OUTPUT_INDEX_LANGUAGES_END_MARKER}`;
+}
+
+/** Replace either supported template token, or refresh an existing switcher block. */
+export function applyOutputIndexLanguageSwitcher(
+  content: string,
+  switcher: string
+): string {
+  const languageSlot = /<!-- ai-release-notes:languages -->[\s\S]*?<!-- ai-release-notes:\/languages -->|\{\{languages\}\}|\{\{langages\}\}/g;
+  let rendered = false;
+  return content.replace(languageSlot, () => {
+    if (rendered) return "";
+    rendered = true;
+    return switcher;
+  });
+}
+
+/** Whether an index already provides a generated switcher region or template slot. */
+export function hasOutputIndexLanguageSwitcher(content: string): boolean {
+  return /<!-- ai-release-notes:languages -->[\s\S]*?<!-- ai-release-notes:\/languages -->|\{\{languages\}\}|\{\{langages\}\}/.test(content);
+}
+
+/** Insert a new index entry or replace the matching release without consuming later template content. */
+export function insertOrUpdateOutputIndexReleaseEntry(
+  existing: string,
+  entry: string,
+  releaseId: string
+): string {
+  const marker = `<!-- ai-release-notes:release ${releaseId} -->`;
+  const entryPattern = new RegExp(
+    `${escapeRegExp(marker)}[\\s\\S]*?` +
+    `(?=(?:<br>)?\\s*<!-- ai-release-notes:(?:release [^>]+|/releases|languages) -->|` +
+    `\\n\\s*(?:---\\s*\\n|</main>|<footer\\b)|$)`
+  );
+  if (entryPattern.test(existing)) {
+    return existing.replace(entryPattern, entry);
+  }
+  const releasesMarker = "<!-- ai-release-notes:releases -->";
+  if (existing.includes(releasesMarker)) {
+    return existing.replace(releasesMarker, `${releasesMarker}\n${entry}`);
+  }
+  return existing.trimEnd() + "\n\n" + entry + "\n";
+}
+
 /**
  * Format the final release note with header.
  */
@@ -239,4 +321,12 @@ function escapeHtml(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value.replace(/[\\[\]*_`]/g, "\\$&");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

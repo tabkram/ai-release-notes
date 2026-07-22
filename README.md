@@ -162,7 +162,9 @@ The main parts are simple:
 - `outputIndex` is optional. It maintains a release summary with links to
   every release file. It may be one destination or a list, for example one
   Markdown and one HTML summary. Add `{lang}` when each language needs its own
-  summary.
+  summary. Index templates can place links between those summaries with
+  `{{languages}}` (or `{{langages}}`). The switcher merges languages from the
+  current prompt with localized index files already present on disk.
 
 Custom instruction and summary templates are optional. The generated config
 keeps their lines commented until you need them.

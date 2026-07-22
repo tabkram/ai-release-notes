@@ -7,8 +7,16 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
-import { markdownToHtml } from "../release.js";
+import {
+  applyOutputIndexLanguageSwitcher,
+  hasOutputIndexLanguageSwitcher,
+  insertOrUpdateOutputIndexReleaseEntry,
+  markdownToHtml,
+  renderOutputIndexLanguageSwitcher,
+  type OutputIndexLanguageLink,
+} from "../release.js";
 import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
+import { discoverOutputIndexLanguages } from "../output-index.js";
 import { getLatestTag, getPreviousTag } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
@@ -19,6 +27,7 @@ import type { GenerateResult, ProviderConfig, ProviderName, ReleaseNotesConfig }
 import { AI_RELEASE_NOTES_VERSION } from "../version.js";
 
 const CLI_VERSION = AI_RELEASE_NOTES_VERSION;
+const LANGUAGE_PATH_PLACEHOLDER = "aireleasenoteslanguageplaceholder";
 const program = new Command();
 
 type OutputTarget = {
@@ -31,11 +40,17 @@ type OutputTarget = {
 
 type OutputIndexTarget = {
   path: string;
+  groupId: number;
   language?: string;
   format: "markdown" | "html";
   templatePath?: string;
   templateLanguage: string;
 };
+
+type OutputIndexLanguageTarget = Pick<
+  OutputIndexTarget,
+  "path" | "groupId" | "format" | "templatePath"
+> & { language: string };
 
 function printStatus(stdout: boolean, message: string): void {
   if (stdout) {
@@ -261,10 +276,11 @@ program
       const outputIndexConfigs = loadedConfig.outputIndex
         ? (Array.isArray(loadedConfig.outputIndex) ? loadedConfig.outputIndex : [loadedConfig.outputIndex])
         : [];
-      const outputIndexTargets: OutputIndexTarget[] = outputIndexConfigs.flatMap((outputIndex) =>
+      const outputIndexTargets: OutputIndexTarget[] = outputIndexConfigs.flatMap((outputIndex, groupId) =>
         outputIndex.saveTo.includes("{lang}")
           ? generatedResult.localized.map((release) => ({
               path: resolve(getOutputPath(outputIndex.saveTo, opts.env, release.language, opts.from, opts.to)),
+              groupId,
               language: release.language,
               format: outputIndex.format,
               templatePath: outputIndex.template,
@@ -272,6 +288,7 @@ program
             }))
           : [{
               path: resolve(getOutputPath(outputIndex.saveTo, opts.env, undefined, opts.from, opts.to)),
+              groupId,
               format: outputIndex.format,
               templatePath: outputIndex.template,
               templateLanguage: outputIndex.templateLanguage,
@@ -279,6 +296,47 @@ program
       );
       if (outputIndexTargets.some((index) => outputTargets.some((target) => resolve(target.path) === index.path))) {
         throw new Error("outputIndex.saveTo must be different from every output.saveTo path");
+      }
+      const duplicateIndexPath = outputIndexTargets.find((target, index) =>
+        outputIndexTargets.findIndex(
+          (candidate) => candidate.path.toLowerCase() === target.path.toLowerCase()
+        ) !== index
+      );
+      if (duplicateIndexPath) {
+        throw new Error(
+          `outputIndex.saveTo resolves more than once to ${duplicateIndexPath.path}. ` +
+          `Use distinct paths and language values.`
+        );
+      }
+      const outputIndexLanguageTargets: OutputIndexLanguageTarget[] = outputIndexTargets
+        .flatMap((target) => target.language ? [{ ...target, language: target.language }] : []);
+      for (const [groupId, outputIndex] of outputIndexConfigs.entries()) {
+        if (!outputIndex.saveTo.includes("{lang}")) continue;
+        const patternPath = resolve(getOutputPath(
+          outputIndex.saveTo,
+          opts.env,
+          LANGUAGE_PATH_PLACEHOLDER,
+          opts.from,
+          opts.to
+        ));
+        const discovered = await discoverOutputIndexLanguages(
+          patternPath,
+          LANGUAGE_PATH_PLACEHOLDER
+        );
+        for (const existingIndex of discovered) {
+          const alreadyAvailable = outputIndexLanguageTargets.some((target) =>
+            target.groupId === groupId &&
+            target.path.toLowerCase() === existingIndex.path.toLowerCase()
+          );
+          if (!alreadyAvailable) {
+            outputIndexLanguageTargets.push({
+              ...existingIndex,
+              groupId,
+              format: outputIndex.format,
+              templatePath: outputIndex.template,
+            });
+          }
+        }
       }
 
       // Save to file
@@ -301,6 +359,7 @@ program
         for (const index of outputIndexTargets) {
           await mkdir(dirname(index.path), { recursive: true });
           const releasePaths = getReleasePathsForIndex(index, outputTargets);
+          const languageLinks = getOutputIndexLanguageLinks(index, outputIndexLanguageTargets);
           const outputIndexContent = await createOrUpdateOutputIndex({
             outputPath: index.path,
             format: index.format,
@@ -343,9 +402,44 @@ program
             toVersion,
             date: generatedResult.metadata.date,
             releasePaths,
+            languageLinks,
           });
           await writeFile(index.path, outputIndexContent, "utf-8");
           console.log(chalk.green("📚 Updated output index " + index.path));
+        }
+
+        const currentIndexPaths = new Set(
+          outputIndexTargets.map((target) => target.path.toLowerCase())
+        );
+        for (const existingIndex of outputIndexLanguageTargets) {
+          if (currentIndexPaths.has(existingIndex.path.toLowerCase())) continue;
+
+          const existing = await readFile(existingIndex.path, "utf-8");
+          const languageLinks = getOutputIndexLanguageLinks(
+            existingIndex,
+            outputIndexLanguageTargets
+          );
+          const languageSwitcher = renderOutputIndexLanguageSwitcher(
+            existingIndex.format,
+            languageLinks
+          );
+          const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(existing);
+          let updated = applyOutputIndexLanguageSwitcher(existing, languageSwitcher);
+          if (
+            !hasLanguageSwitcher &&
+            !existingIndex.templatePath &&
+            languageLinks.length > 1 &&
+            existing.includes(RELEASES_MARKER)
+          ) {
+            updated = existing.replace(
+              RELEASES_MARKER,
+              `${languageSwitcher}\n\n${RELEASES_MARKER}`
+            );
+          }
+          if (updated !== existing) {
+            await writeFile(existingIndex.path, updated, "utf-8");
+            console.log(chalk.green("🌐 Refreshed languages in " + existingIndex.path));
+          }
         }
       }
 
@@ -429,7 +523,21 @@ function getOutputFormat(target: OutputTarget): "markdown" | "html" {
   return target.format === "html" ? "html" : "markdown";
 }
 
+function getOutputIndexLanguageLinks(
+  index: Pick<OutputIndexLanguageTarget, "path" | "groupId">,
+  targets: OutputIndexLanguageTarget[]
+): OutputIndexLanguageLink[] {
+  return targets
+    .filter((candidate) => candidate.groupId === index.groupId)
+    .map((candidate) => ({
+      language: candidate.language,
+      href: toRelativeLink(index.path, candidate.path),
+      active: candidate.path.toLowerCase() === index.path.toLowerCase(),
+    }));
+}
+
 const RELEASES_MARKER = "<!-- ai-release-notes:releases -->";
+const RELEASES_END_MARKER = "<!-- ai-release-notes:/releases -->";
 
 type OutputIndexCopy = {
   release: string;
@@ -452,6 +560,7 @@ async function createOrUpdateOutputIndex(params: {
   toVersion: string;
   date: string;
   releasePaths: string[];
+  languageLinks: OutputIndexLanguageLink[];
 }): Promise<string> {
   const copy = params.translateCopy
     ? await params.translateCopy()
@@ -463,21 +572,29 @@ async function createOrUpdateOutputIndex(params: {
   const releaseEntry = buildOutputIndexEntry(params, releaseId, copy, localizedDate);
   const indexTitle = `${params.projectName ? params.projectName + " · " : ""}${copy.releaseNotes}`;
   const intro = copy.intro(params.environment);
+  const languageSwitcher = renderOutputIndexLanguageSwitcher(params.format, params.languageLinks);
 
   if (existsSync(params.outputPath)) {
     const existing = await readFile(params.outputPath, "utf-8");
     const normalizedExisting = params.format === "html"
       ? unwrapHtmlDocumentCodeFence(existing)
       : existing;
-    return insertOrUpdateReleaseEntry(
+    const boundedExisting = ensureOutputIndexReleaseBoundary(normalizedExisting, params.format);
+    const updated = insertOrUpdateOutputIndexReleaseEntry(
       localizeExistingIndexEntries(
-        localizeExistingIndexChrome(normalizedExisting, params.format, indexTitle, intro),
+        localizeExistingIndexChrome(boundedExisting, params.format, indexTitle, intro),
         params.format,
         copy
       ),
       releaseEntry,
       releaseId
     );
+    const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(updated);
+    const withLanguageSwitcher = applyOutputIndexLanguageSwitcher(updated, languageSwitcher);
+    if (!params.templatePath && params.languageLinks.length > 1 && !hasLanguageSwitcher) {
+      return updated.replace(RELEASES_MARKER, `${languageSwitcher}\n\n${RELEASES_MARKER}`);
+    }
+    return withLanguageSwitcher;
   }
 
   const template = await loadOutputIndexTemplate(params.templatePath, params.format);
@@ -490,6 +607,7 @@ async function createOrUpdateOutputIndex(params: {
     language: params.language || "",
     date: localizedDate,
     releases: releaseEntry,
+    languages: languageSwitcher,
     version: CLI_VERSION,
   });
   if (params.format === "markdown") {
@@ -562,16 +680,18 @@ function renderOutputIndexTemplate(
     language: string;
     date: string;
     releases: string;
+    languages: string;
     version: string;
   }
 ): string {
-  return template
+  const rendered = template
     .replaceAll("{{projectName}}", values.projectName)
     .replaceAll("{{environment}}", values.environment)
     .replaceAll("{{language}}", values.language)
     .replaceAll("{{date}}", values.date)
-    .replaceAll("{{releases}}", values.releases)
+    .replaceAll("{{releases}}", `${values.releases}\n${RELEASES_END_MARKER}`)
     .replaceAll("{{version}}", values.version);
+  return applyOutputIndexLanguageSwitcher(rendered, values.languages);
 }
 
 function localizeExistingIndexEntries(
@@ -772,7 +892,17 @@ function unwrapHtmlDocumentCodeFence(content: string): string {
 }
 
 function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
-  const values = [RELEASES_MARKER, "{{projectName}}", "{{environment}}", "{{language}}", "{{date}}", "{{releases}}", "{{version}}"];
+  const values = [
+    RELEASES_MARKER,
+    "{{projectName}}",
+    "{{environment}}",
+    "{{language}}",
+    "{{languages}}",
+    "{{langages}}",
+    "{{date}}",
+    "{{releases}}",
+    "{{version}}",
+  ];
   const tokens = values.map((value, index) => [value, `__AI_RELEASE_TEMPLATE_TOKEN_${index}__`] as [string, string]);
   return {
     template: tokens.reduce((result, [value, token]) => result.replaceAll(value, token), template),
@@ -798,26 +928,33 @@ function languageCode(language: string): string {
   return language.toLowerCase().split(/[-_]/, 1)[0];
 }
 
-function insertOrUpdateReleaseEntry(existing: string, entry: string, releaseId: string): string {
-  const marker = `<!-- ai-release-notes:release ${releaseId} -->`;
-  const entryPattern = new RegExp(
-    `${escapeRegExp(marker)}[\\s\\S]*?(?=(?:<br>)?\\s*<!-- ai-release-notes:release [^>]+ -->|$)`
-  );
-  if (entryPattern.test(existing)) {
-    return existing.replace(entryPattern, entry);
+function ensureOutputIndexReleaseBoundary(
+  content: string,
+  format: "markdown" | "html"
+): string {
+  if (!content.includes(RELEASES_MARKER) || content.includes(RELEASES_END_MARKER)) {
+    return content;
   }
-  if (existing.includes(RELEASES_MARKER)) {
-    return existing.replace(RELEASES_MARKER, `${RELEASES_MARKER}\n${entry}`);
+
+  const releasesStart = content.indexOf(RELEASES_MARKER) + RELEASES_MARKER.length;
+  const candidates = [content.indexOf("<!-- ai-release-notes:languages -->", releasesStart)];
+  candidates.push(format === "html"
+    ? content.indexOf("</main>", releasesStart)
+    : content.indexOf("\n---\n", releasesStart));
+  const boundary = candidates.filter((index) => index >= 0).sort((a, b) => a - b)[0];
+
+  if (boundary === undefined) {
+    return `${content.trimEnd()}\n${RELEASES_END_MARKER}\n`;
   }
-  return existing.trimEnd() + "\n\n" + entry + "\n";
+  return `${content.slice(0, boundary).trimEnd()}\n${RELEASES_END_MARKER}\n${content.slice(boundary).replace(/^\n/, "")}`;
 }
 
 function toRelativeLink(fromPath: string, toPath: string): string {
-  return encodeURI(relative(dirname(fromPath), toPath)).replaceAll("\\", "/");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return relative(dirname(fromPath), toPath)
+    .replaceAll("\\", "/")
+    .split("/")
+    .map((segment) => segment === "." || segment === ".." ? segment : encodeURIComponent(segment))
+    .join("/");
 }
 
 function escapeHtml(value: string): string {

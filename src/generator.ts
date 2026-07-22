@@ -197,10 +197,8 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const needsHtml = outputConfigs.some((output) => output.format === "html");
   const outputFormat = options.format || outputConfigs[0]?.format || "md";
   if (outputFormat === "html" || needsHtml) {
-    const template = await readFile(
-      resolve(__dirname, "../templates/default-release-note.html"),
-      "utf-8"
-    );
+    const htmlOutput = outputConfigs.find((output) => output.format === "html");
+    const template = await loadReleaseNoteTemplate(options.template || htmlOutput?.template);
     const renderHtmlRelease = (releaseMarkdown: string) => renderReleaseNoteHtml(template, releaseMarkdown, {
       fromVersion: options.fromVersion,
       toVersion: options.toVersion,
@@ -217,6 +215,19 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   usage.durationMs = Date.now() - startedAt;
 
   return result;
+}
+
+/** Load a custom release-note template, falling back to the bundled HTML template. */
+export async function loadReleaseNoteTemplate(templatePath?: string): Promise<string> {
+  const resolvedTemplatePath = templatePath
+    ? resolve(templatePath)
+    : resolve(__dirname, "../templates/default-release-note.html");
+
+  if (templatePath && !existsSync(resolvedTemplatePath)) {
+    throw new Error(`Release note template not found: ${resolvedTemplatePath}`);
+  }
+
+  return readFile(resolvedTemplatePath, "utf-8");
 }
 
 /**

@@ -49,6 +49,30 @@
           color: var(--muted);
       }
 
+      .language-switcher {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+          margin: 1.25rem 0 2rem;
+      }
+
+      .language-option {
+          padding: 0.3rem 0.7rem;
+          border: 1px solid var(--line);
+          border-radius: 999px;
+          color: var(--link);
+          font-size: 0.875rem;
+          font-weight: 700;
+          line-height: 1.2;
+          text-decoration: none;
+      }
+
+      .language-option.is-active {
+          border-color: var(--text);
+          background: var(--text);
+          color: var(--page);
+      }
+
       .release-entry {
           margin: 1.25rem 0;
           padding: 1.35rem 1.5rem;
@@ -89,6 +113,8 @@
 <main>
   <h1>{{projectName}} release notes</h1>
   <p class="intro">A concise release history for {{environment}}. The newest release is listed first.</p>
+
+  {{languages}}
 
   <!-- ai-release-notes:releases -->
   {{releases}}

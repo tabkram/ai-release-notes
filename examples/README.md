@@ -87,7 +87,7 @@ generation and links to each release file.
 ```yaml
 outputIndex:
   format: markdown
-  saveTo: ./releases/RELEASE_INDEX_{env}.md
+  saveTo: ./releases/RELEASE_INDEX_{env}_{lang}.md
   # Uncomment after creating the file:
   # template: ./.ai-output-index-template.md
 ```
@@ -99,6 +99,8 @@ Create `.ai-output-index-template.md` to control its introduction and layout:
 
 A concise release history for {{environment}}.
 
+{{languages}}
+
 <!-- ai-release-notes:releases -->
 {{releases}}
 
@@ -108,15 +110,26 @@ _Generated with ai-release-notes v{{version}}._
 
 Write the surrounding text freely. For an `_es` index, the CLI translates the
 template text while preserving `{{projectName}}`, `{{environment}}`,
-`{{releases}}`, and `{{version}}`. Keep the `ai-release-notes:releases`
-marker: new release links are inserted directly below it.
+`{{languages}}`, `{{releases}}`, and `{{version}}`. Keep the
+`ai-release-notes:releases` marker: new release links are inserted directly
+below it.
+
+`{{languages}}` renders links to every localized index in Markdown and styled
+buttons in HTML, with the current language highlighted. Put the token on its
+own line at the desired content position in a custom index template. The
+spelling `{{langages}}` is also accepted. The switcher is available when the
+index path contains `{lang}`, so each configured language has a sibling index
+to link to. Previously generated sibling indexes are discovered too: if `en`
+already exists and the current prompt contains `[fr, it]`, every index links to
+`en`, `fr`, and `it`. Remove an old localized index file when it should no
+longer appear.
 
 To publish an HTML index instead, change the format and file extension:
 
 ```yaml
 outputIndex:
   format: html
-  saveTo: ./releases/RELEASE_INDEX_{env}.html
+  saveTo: ./releases/RELEASE_INDEX_{env}_{lang}.html
   # Uncomment after creating the file:
   # template: ./.ai-output-index-template.html
 ```
@@ -153,4 +166,6 @@ outputIndex:
   saveTo: ./releases/RELEASE_INDEX_{env}_{lang}.md
 ```
 
-This creates a release file and an output index per language.
+This creates a release file and an output index per language. The default index
+template includes the language switcher; a custom template can position it with
+`{{languages}}` or `{{langages}}`.

@@ -50,4 +50,5 @@ outputIndex:
   format: markdown
   saveTo: ./releases/RELEASE_INDEX_{env}.md
   # Optional: create this file and uncomment to customize the index layout.
+  # With {lang} in saveTo, use {{languages}} (or {{langages}}) for index links.
   # template: ./.ai-output-index-template.md
