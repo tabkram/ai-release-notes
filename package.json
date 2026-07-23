@@ -1,6 +1,6 @@
 {
   "name": "ai-release-notes",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Generic AI-powered release notes generator using Vercel AI SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
