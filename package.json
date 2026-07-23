@@ -30,6 +30,14 @@
     "vercel-ai-sdk",
     "cli"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tabkram/ai-release-notes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tabkram/ai-release-notes/issues"
+  },
+  "homepage": "https://github.com/tabkram/ai-release-notes#readme",
   "author": "",
   "license": "MIT",
   "engines": {
