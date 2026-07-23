@@ -1,12 +1,16 @@
-name: Publish to npm
+name: Publish to NPM
 
 on:
   release:
-    types: [published]
+    types: [created]
 
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
