@@ -76,6 +76,9 @@ This creates `.ai-release-notes.yml` in your project root. **No API keys are sto
 ### 3. Generate release notes
 
 ```bash
+# Uses the full Git history through v1.1.0
+npx ai-release-notes generate --to v1.1.0 --env PROD
+
 # Uses the default provider (openai) — needs OPENAI_API_KEY
 npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD
 
@@ -107,7 +110,7 @@ time. Translated releases include every translation call in these totals.
 
 | Option | Description |
 |--------|-------------|
-| `--from <version>` | Previous version tag |
+| `--from <version>` | Previous version tag, or `start` for the full history (default: `start`) |
 | `--to <version>` | Current version tag |
 | `--env <env>` | **Required.** Environment name (PROD, STAGING, etc.) |
 | `--release-date <value>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |

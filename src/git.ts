@@ -14,19 +14,21 @@ export async function getChangelog(
   repoPath?: string
 ): Promise<string[]> {
   const git: SimpleGit = simpleGit(repoPath || process.cwd());
-
-  const log = await git.log({
-    from,
-    to,
-    format: {
-      hash: "%H",
-      date: "%ai",
-      message: "%s",
-      author_name: "%an",
-      body: "%b",
-    },
-    splitter: "|||",
-  });
+  const log =
+    from === "start"
+      ? await git.log([to])
+      : await git.log({
+          from,
+          to,
+          format: {
+            hash: "%H",
+            date: "%ai",
+            message: "%s",
+            author_name: "%an",
+            body: "%b",
+          },
+          splitter: "|||",
+        });
 
   return log.all.map((entry) => entry.message.trim());
 }

@@ -17,12 +17,15 @@ Then generate a release:
 
 ```bash
 npx ai-release-notes generate \
-  --from v1.25.9 \
   --to v1.28.0 \
   --with claude \
   --env PROD \
   --release-date tag
 ```
+
+Omitting `--from` is the same as passing `--from start`: both include the
+full Git history through the `--to` ref. Pass a tag or ref to `--from` when
+you only want the commits after that point.
 
 The example writes one release file and updates a shared output index. It
 reports those file paths in the terminal. Use `--stdout` when you want to
@@ -148,8 +151,7 @@ output:
 ```
 
 This produces one Markdown and one HTML file per release. The output index
-links to both files. If `--from` or `--to` is omitted, the filename uses
-`start` or `end` for that part.
+links to both files. If `--from` is omitted, the filename uses `start`.
 
 For several languages, add them in the order you want:
 

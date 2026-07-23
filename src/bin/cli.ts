@@ -17,7 +17,7 @@ import {
 } from "../release.js";
 import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
 import { discoverOutputIndexLanguages } from "../output-index.js";
-import { getLatestTag, getPreviousTag } from "../git.js";
+import { getLatestTag } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve, join, dirname, relative } from "path";
@@ -162,7 +162,11 @@ program
   .command("generate")
   .alias("gen")
   .description("Generate release notes from git tags")
-  .option("--from <version>", "Previous version tag (e.g. v1.0.0)")
+  .option(
+    "--from <version>",
+    'Previous version tag, or "start" for the full history',
+    "start"
+  )
   .option("--to <version>", "Current version tag (e.g. v1.1.0)")
   .requiredOption("--env <environment>", "Environment: PROD, STAGING, DEV...")
   .option("--release-date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
@@ -184,8 +188,8 @@ program
     let config: ReleaseNotesConfig | undefined;
     let summaryPrinted = false;
     try {
-      // Auto-detect tags if not provided
-      let fromVersion = opts.from;
+      // Start at the repository's first commit unless an explicit tag/ref is provided.
+      const fromVersion = opts.from;
       let toVersion = opts.to;
 
       if (!toVersion) {
@@ -195,15 +199,6 @@ program
           process.exit(1);
         }
         printStatus(opts.stdout, chalk.blue(`📌 Detected current tag: ${toVersion}`));
-      }
-
-      if (!fromVersion) {
-        fromVersion = await getPreviousTag(toVersion);
-        if (!fromVersion) {
-          console.error(chalk.red("❌ Could not detect previous tag. Use --from <version>"));
-          process.exit(1);
-        }
-        printStatus(opts.stdout, chalk.blue(`📌 Detected previous tag: ${fromVersion}`));
       }
 
       const loadedConfig = await loadConfig(opts.config);
