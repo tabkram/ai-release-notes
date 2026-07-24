@@ -10,8 +10,9 @@ import {
   buildTranslationSystemPrompt,
   buildUserPrompt,
   resolveInstructions,
+  resolvePromptSource,
 } from "./prompts/builder.js";
-import { formatReleaseNote, renderReleaseNoteHtml } from "./release.js";
+import { renderReleaseNoteHtml } from "./release.js";
 import { loadContextFiles } from "./context.js";
 import type { GenerateOptions, GenerateResult, GenerationUsage } from "./types.js";
 import { readFile } from "fs/promises";
@@ -69,24 +70,40 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     );
   }
 
-  const parsedCommits = parseCommits(rawCommits, {
+  const allCommits = parseCommits(rawCommits, {
     excludeTypes: config.git?.excludeTypes,
   });
+
+  // git.maxCommits bounds what a single run can send to a paid API, so a repo
+  // with years of history behind a missing tag cannot turn into one huge call.
+  const maxCommits = config.git?.maxCommits ?? 200;
+  const parsedCommits = allCommits.slice(0, maxCommits);
+  if (allCommits.length > parsedCommits.length) {
+    console.warn(
+      `⚠️  ${allCommits.length} commits found; using the most recent ${maxCommits}. ` +
+        `Raise git.maxCommits to include more.`
+    );
+  }
 
   // ── Load context files (files + dirs in one array) ──
   const contextFiles = await loadContextFiles(options.context);
 
   // ── Build prompts ──
+  const languages = config.prompt?.languages?.length ? config.prompt.languages : ["en"];
+  const primaryLanguage = languages[0];
   const systemPrompt = await buildSystemPrompt(config.prompt);
   const date = await resolveReleaseDate(options, options.toVersion);
 
   const userPrompt = buildUserPrompt({
+    projectName: config.projectName,
     fromVersion: options.fromVersion,
     toVersion: options.toVersion,
     environment: options.environment,
     date,
     commits: parsedCommits,
     contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
+    language: primaryLanguage,
+    template: await resolvePromptSource(config.prompt?.user),
   });
 
   // ── Dry run ──
@@ -94,7 +111,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     const dryOutput = `=== DRY RUN ===\n\nSYSTEM PROMPT:\n${systemPrompt}\n\nUSER PROMPT:\n${userPrompt}`;
     return {
       markdown: dryOutput,
-      localized: [{ language: config.prompt?.languages?.[0] || "en", markdown: dryOutput }],
+      localized: [{ language: primaryLanguage, markdown: dryOutput }],
       metadata: {
         fromVersion: options.fromVersion,
         toVersion: options.toVersion,
@@ -137,16 +154,10 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   try {
     const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt);
     addUsage(usage, llmResult.usage);
-    primaryMarkdown = formatReleaseNote(llmResult.text, {
-      fromVersion: options.fromVersion,
-      toVersion: options.toVersion,
-      environment: options.environment,
-      date,
-      projectName: config.projectName,
-    });
+    primaryMarkdown = llmResult.text.trim();
 
     const translationInstructions = await resolveInstructions(config.prompt?.instructions);
-    for (const language of (config.prompt?.languages || ["en"]).slice(1)) {
+    for (const language of languages.slice(1)) {
       const translatedRelease = await callLLM(
         providerName,
         providerConfig,
@@ -166,7 +177,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
   // ── Format output ──
   const localized = [{
-    language: config.prompt?.languages?.[0] || "en",
+    language: primaryLanguage,
     markdown: primaryMarkdown,
   }, ...translatedReleases];
   const markdown = localized

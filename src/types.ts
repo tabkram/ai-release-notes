@@ -40,15 +40,23 @@ export type ProviderName =
   | "ollama";
 
 // ─────────────────────────────────────────
-// Instructions — can be inline text or a file path
+// Prompt sources — inline text or a file path
 // ─────────────────────────────────────────
 
-export const InstructionsConfigSchema = z.union([
-  z.string(),                        // inline instructions
+export const PromptSourceSchema = z.union([
+  z.string(),                        // inline text
   z.object({                         // file reference
     file: z.string(),
   }),
 ]);
+
+export type PromptSource = z.infer<typeof PromptSourceSchema>;
+
+/**
+ * The project's writing rules, applied to every prompt a release goes through:
+ *   instructions: { file: ./.ai-release-instructions.md }
+ */
+export const InstructionsConfigSchema = PromptSourceSchema;
 
 export type InstructionsConfig = z.infer<typeof InstructionsConfigSchema>;
 
@@ -57,15 +65,16 @@ export type InstructionsConfig = z.infer<typeof InstructionsConfigSchema>;
 // ─────────────────────────────────────────
 
 export const PromptConfigSchema = z.object({
-  system: z.string().optional(),
-  user: z.string().optional(),
-  languages: z.array(z.string().min(1)).min(1).default(["en"]),
+  /** Replaces the built-in generation system prompt. */
+  system: PromptSourceSchema.optional(),
   /**
-   * Additional instructions for the LLM.
-   * Can be:
-   * - A string (inline instructions)
-   * - { file: "path/to/instructions.md" } (load from file)
+   * Replaces the built-in user prompt. Available placeholders:
+   * {{fromVersion}}, {{toVersion}}, {{environment}}, {{date}}, {{language}},
+   * {{commitCount}}, {{changelog}}, {{context}}.
    */
+  user: PromptSourceSchema.optional(),
+  /** First language is generated; the others are translated from it. */
+  languages: z.array(z.string().min(1)).min(1).default(["en"]),
   instructions: InstructionsConfigSchema.optional(),
 });
 

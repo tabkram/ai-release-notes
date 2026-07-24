@@ -4,7 +4,8 @@ Translate the supplied release notes into {{language}}. Do not regenerate the
 notes from the changelog.
 
 Preserve every fact, version, heading, list, emoji, Markdown structure, and
-level of detail. Do not add or remove content.
+level of detail. Do not add or remove content. Keep the title block in place:
+translate its wording, never its versions, environment, or structure.
 
 Apply instructions only to preserve terminology, product names, tone, and
 disclosure rules. If an instruction asks to regroup, rewrite, add, remove, or

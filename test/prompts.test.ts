@@ -1,15 +1,79 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSystemPrompt, buildTranslationSystemPrompt } from "../src/prompts/builder.js";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  buildSystemPrompt,
+  buildTranslationSystemPrompt,
+  buildUserPrompt,
+  resolveInstructions,
+} from "../src/prompts/builder.js";
+import type { ParsedCommit } from "../src/types.js";
 
-test("adds project instructions to the main generation prompt", async () => {
+async function writeTempFile(name: string, content: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "ai-release-notes-"));
+  const path = join(dir, name);
+  await writeFile(path, content, "utf-8");
+  return path;
+}
+
+const commits: ParsedCommit[] = [
+  {
+    hash: "abc1234",
+    type: "feat",
+    scope: "dashboard",
+    message: "add release filters",
+    author: "Dev",
+    date: "2026-06-03",
+  },
+];
+
+test("uses the built-in instructions when a project supplies none", async () => {
+  const prompt = await buildSystemPrompt({ languages: ["en"] });
+
+  assert.match(prompt, /Write the title block exactly once/);
+});
+
+test("replaces the built-in instructions with the project ones", async () => {
   const prompt = await buildSystemPrompt({
     languages: ["en"],
     instructions: "Keep ENVIRO exactly as written.",
   });
 
   assert.match(prompt, /Keep ENVIRO exactly as written\./);
-  assert.doesNotMatch(prompt, /Never create fake features/);
+  assert.doesNotMatch(prompt, /Write the title block exactly once/);
+});
+
+test("reads instructions and system prompt from files", async () => {
+  const instructionsFile = await writeTempFile("rules.md", "Mention the migration guide.");
+  const systemFile = await writeTempFile("system.md", "You write terse notes.");
+
+  const prompt = await buildSystemPrompt({
+    languages: ["en"],
+    system: { file: systemFile },
+    instructions: { file: instructionsFile },
+  });
+
+  assert.match(prompt, /You write terse notes\./);
+  assert.match(prompt, /Mention the migration guide\./);
+});
+
+test("applies the same instructions to generation and translation", async () => {
+  const instructionsFile = await writeTempFile(
+    "rules.md",
+    "Group bullets by domain. Keep product names in English."
+  );
+  const instructions = { file: instructionsFile };
+
+  const systemPrompt = await buildSystemPrompt({ languages: ["en", "fr"], instructions });
+  const translationPrompt = await buildTranslationSystemPrompt(
+    "fr",
+    await resolveInstructions(instructions)
+  );
+
+  assert.match(systemPrompt, /Keep product names in English\./);
+  assert.match(translationPrompt, /Keep product names in English\./);
 });
 
 test("keeps translation distinct from content rewriting", async () => {
@@ -22,4 +86,37 @@ test("keeps translation distinct from content rewriting", async () => {
   assert.match(prompt, /do not do that during translation/i);
   assert.match(prompt, /protected vocabulary/i);
   assert.match(prompt, /Preserve ENVIRO as written/);
+});
+
+test("supplies the release metadata the instructions can compose a title with", () => {
+  const prompt = buildUserPrompt({
+    projectName: "ACME Platform",
+    fromVersion: "v1.0.0",
+    toVersion: "v1.1.0",
+    environment: "prod",
+    date: "June 03, 2026",
+    commits,
+  });
+
+  assert.match(prompt, /Project: ACME Platform/);
+  assert.match(prompt, /Previous version: v1\.0\.0/);
+  assert.match(prompt, /- feat: \[dashboard\] add release filters/);
+});
+
+test("fills a custom user prompt template", () => {
+  const prompt = buildUserPrompt({
+    projectName: "ACME Platform",
+    fromVersion: "v1.0.0",
+    toVersion: "v1.1.0",
+    environment: "prod",
+    date: "June 03, 2026",
+    language: "fr",
+    commits,
+    template: "{{projectName}} {{toVersion}} ({{language}}, {{commitCount}} commits)\n{{changelog}}\n{{unknown}}",
+  });
+
+  assert.match(prompt, /^ACME Platform v1\.1\.0 \(fr, 1 commits\)$/m);
+  assert.match(prompt, /- feat: \[dashboard\] add release filters/);
+  // An unknown placeholder stays visible instead of silently emptying the prompt.
+  assert.match(prompt, /\{\{unknown\}\}/);
 });
