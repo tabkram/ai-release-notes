@@ -1,3 +1,21 @@
+## [0.1.0](https://github.com/tabkram/ai-release-notes/compare/v0.0.2...v0.1.0) (2026-07-24)
+
+### ⚠ BREAKING CHANGES
+
+* **security:** raw HTML in a generated release note is escaped rather than
+rendered, git.maxCommits is enforced at 200 by default, and a context
+directory scan now skips files it previously uploaded.
+* **prompt:** formatReleaseNote is no longer exported and the release
+header is no longer added after generation. A project that overrides
+prompt.instructions must describe its title block there.
+
+### Features
+
+* **prompt:** let instructions own the whole release note ([56674de](https://github.com/tabkram/ai-release-notes/commit/56674dec3847474ac5be9a44274566363835bb2f))
+
+### Bug Fixes
+
+* **security:** treat changelog, context, and config as untrusted ([f386c0d](https://github.com/tabkram/ai-release-notes/commit/f386c0dcf429fa61050b5009968c294009c45a18))
 
 ## [0.0.1](https://github.com/tabkram/ai-release-notes/compare/683de54746e903e8ec1208cf332d65e2fe0b92b0...v0.0.1) (2026-07-22)
 
