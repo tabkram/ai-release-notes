@@ -110,9 +110,20 @@ export function renderReleaseNoteHtml(
     .replaceAll("{{content}}", renderMarkdown(content));
 }
 
-/** Convert Markdown to self-contained, browser-friendly HTML. */
-export function markdownToHtml(markdown: string, title = "Release Notes", footer = ""): string {
-  const html = renderMarkdown(markdown);
+/**
+ * Convert Markdown to self-contained, browser-friendly HTML.
+ *
+ * Raw HTML is escaped unless the caller vouches for the Markdown. Only content
+ * this tool composed itself — an output index and its language switcher — is
+ * ever trusted; model output and changelog text never are.
+ */
+export function markdownToHtml(
+  markdown: string,
+  title = "Release Notes",
+  footer = "",
+  options: { trustedHtml?: boolean } = {}
+): string {
+  const html = renderMarkdown(markdown, options.trustedHtml === true);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -159,7 +170,7 @@ ${footer}
 </html>`;
 }
 
-function renderMarkdown(markdown: string): string {
+function renderMarkdown(markdown: string, trustedHtml = false): string {
   const output: string[] = [];
   const paragraph: string[] = [];
   const codeLines: string[] = [];
@@ -254,7 +265,10 @@ function renderMarkdown(markdown: string): string {
       closeParagraph();
       closeList();
       output.push(`<blockquote>${inlineMarkdown(line.replace(/^\s{0,3}>\s?/, ""))}</blockquote>`);
-    } else if (/^<!--.*-->$/.test(line.trim()) || /^<\/?[a-z][\s\S]*>$/i.test(line.trim())) {
+    } else if (
+      trustedHtml &&
+      (/^<!--.*-->$/.test(line.trim()) || /^<\/?[a-z][\s\S]*>$/i.test(line.trim()))
+    ) {
       closeParagraph();
       closeList();
       output.push(line);
@@ -278,7 +292,9 @@ function inlineMarkdown(value: string): string {
       codeTokens.push(`<code>${code}</code>`);
       return token;
     })
-    .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (match, label: string, url: string) =>
+      isSafeUrl(url) ? `<a href="${url}">${label}</a>` : match
+    )
     .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
@@ -288,6 +304,21 @@ function inlineMarkdown(value: string): string {
     (html, code, index) => html.replace(`\u0000CODE_${index}\u0000`, code),
     rendered
   );
+}
+
+/**
+ * Whether a link target is safe to place in an href.
+ *
+ * A release note is written from changelog text nobody on the publishing side
+ * reviewed, so a link may carry a scripting scheme. Browsers ignore control
+ * characters and surrounding whitespace when they resolve a scheme, so those
+ * are removed before the scheme is read.
+ */
+function isSafeUrl(url: string): boolean {
+  const probe = url.replace(/[\u0000-\u0020\u007f-\u009f]/g, "").toLowerCase();
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(probe);
+  // Relative paths and fragments carry no scheme and stay within the document.
+  return !scheme || ["http", "https", "mailto"].includes(scheme[1]);
 }
 
 function escapeHtml(value: string): string {

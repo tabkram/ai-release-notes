@@ -50,6 +50,46 @@ function getApiKey(providerName: ProviderName): string {
   return key || "ollama";
 }
 
+/** Hostnames that keep a request on the machine running the generator. */
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"]);
+
+/**
+ * Check a configured endpoint before any prompt or key is sent to it.
+ *
+ * A config file travels with the repository, so a pull request can propose a
+ * baseURL. Pointing it at another host sends the whole prompt there, and for
+ * azure-openai the API key as well.
+ */
+export function resolveBaseURL(
+  providerName: ProviderName,
+  config: ProviderConfig
+): string | undefined {
+  if (!config.baseURL) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(config.baseURL);
+  } catch {
+    throw new LLMError(`Invalid baseURL for ${providerName}: ${config.baseURL}`);
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new LLMError(
+      `baseURL for ${providerName} must use http or https, got "${url.protocol}"`
+    );
+  }
+
+  if (!LOCAL_HOSTS.has(url.hostname)) {
+    const alsoKey = providerName === "azure-openai" ? " and the API key" : "";
+    console.warn(
+      `⚠️  ${providerName} is configured to send prompts${alsoKey} to ${url.origin}. ` +
+        `Confirm that this endpoint is one you control.`
+    );
+  }
+
+  return config.baseURL;
+}
+
 /**
  * Call an LLM with the given system/user prompts.
  * Only the selected provider's API key is checked.
@@ -110,7 +150,7 @@ function createModel(
     case "azure-openai": {
       const azure = createOpenAI({
         apiKey,
-        baseURL: config.baseURL,
+        baseURL: resolveBaseURL(providerName, config),
       });
       return azure(config.model || "gpt-4o");
     }
@@ -118,7 +158,7 @@ function createModel(
     case "ollama": {
       const ollama = createOpenAI({
         apiKey: apiKey || "ollama",
-        baseURL: config.baseURL || "http://localhost:11434/v1",
+        baseURL: resolveBaseURL(providerName, config) || "http://localhost:11434/v1",
       });
       return ollama(config.model || "llama3.1");
     }

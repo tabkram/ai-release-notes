@@ -219,6 +219,12 @@ prompt:
 Whatever the model receives, `--dry-run` prints it without calling a provider,
 and `--verbose` reports which instructions were applied.
 
+Instructions shape the release note; they do not replace it. Every request opens
+with a scope guard that no configuration key removes, so `instructions` and
+`system` control wording, sections, tone, language, and terminology, but cannot
+repurpose the tool into a general-purpose assistant. See
+[Security](#security-) for the full trust model.
+
 ---
 
 ## Context Files
@@ -229,6 +235,33 @@ Provide additional context to the LLM. Accepts a **mixed array** of files and di
 npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD \
   --context ./specs/main.md ./docs/models/ ./README.md
 ```
+
+Context is sent to your LLM provider, so a directory scan skips what it should
+not upload: credential-shaped files, content matching known key formats, binary
+files, and `.git`, `.ssh`, `.aws`, `node_modules` and similar. A file you name
+explicitly is always loaded, with a warning when it looks sensitive. Scans stop
+at 256 KB per file, 1 MB total, 200 files, and 8 directory levels.
+
+---
+
+## Security 🔒
+
+Commit messages come from anyone who can land a commit, and a config file
+travels with the repository. Both are treated as untrusted:
+
+- **Scope guard.** Prepended to every system prompt, including a custom
+  `prompt.system`, and not removable by configuration.
+- **Data boundaries.** The changelog and context go to the model in labelled
+  blocks, and text imitating a delimiter is rewritten so it cannot break out.
+- **Safe rendering.** Raw HTML in a release note is escaped and link targets are
+  limited to `http`, `https`, `mailto`, and relative paths.
+- **Bounded spend.** `git.maxCommits` (default 200) caps one run.
+- **Endpoint checks.** `baseURL` must be `http`/`https`, and a non-local one
+  warns before any prompt leaves the machine.
+
+A release note is still model output written from unreviewed input. Review one
+before publishing it. Full details and reporting instructions are in
+[security.md](security.md).
 
 ---
 

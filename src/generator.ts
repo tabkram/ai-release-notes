@@ -70,9 +70,20 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     );
   }
 
-  const parsedCommits = parseCommits(rawCommits, {
+  const allCommits = parseCommits(rawCommits, {
     excludeTypes: config.git?.excludeTypes,
   });
+
+  // git.maxCommits bounds what a single run can send to a paid API, so a repo
+  // with years of history behind a missing tag cannot turn into one huge call.
+  const maxCommits = config.git?.maxCommits ?? 200;
+  const parsedCommits = allCommits.slice(0, maxCommits);
+  if (allCommits.length > parsedCommits.length) {
+    console.warn(
+      `⚠️  ${allCommits.length} commits found; using the most recent ${maxCommits}. ` +
+        `Raise git.maxCommits to include more.`
+    );
+  }
 
   // ── Load context files (files + dirs in one array) ──
   const contextFiles = await loadContextFiles(options.context);

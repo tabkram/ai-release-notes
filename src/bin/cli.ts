@@ -605,15 +605,18 @@ async function createOrUpdateOutputIndex(params: {
     releases: releaseEntry,
     languages: languageSwitcher,
     version: CLI_VERSION,
-  });
+  }, params.format);
   if (params.format === "markdown") {
     return rendered.trim() + "\n";
   }
 
   const isHtmlTemplate = !params.templatePath || /\.html?$/i.test(params.templatePath);
+  // An index is assembled here from the template and already-escaped entries,
+  // so its own markup is allowed through. A release note is model output and
+  // never gets that trust.
   const html = isHtmlTemplate
     ? rendered
-    : markdownToHtml(rendered, "Release index");
+    : markdownToHtml(rendered, "Release index", "", { trustedHtml: true });
   return html;
 }
 
@@ -678,15 +681,19 @@ function renderOutputIndexTemplate(
     releases: string;
     languages: string;
     version: string;
-  }
+  },
+  format: "markdown" | "html" = "markdown"
 ): string {
+  // A project name and an environment reach an HTML index straight from config
+  // and the command line, so they are escaped like every other value there.
+  const value = (raw: string) => (format === "html" ? escapeHtml(raw) : raw);
   const rendered = template
-    .replaceAll("{{projectName}}", values.projectName)
-    .replaceAll("{{environment}}", values.environment)
-    .replaceAll("{{language}}", values.language)
-    .replaceAll("{{date}}", values.date)
+    .replaceAll("{{projectName}}", value(values.projectName))
+    .replaceAll("{{environment}}", value(values.environment))
+    .replaceAll("{{language}}", value(values.language))
+    .replaceAll("{{date}}", value(values.date))
     .replaceAll("{{releases}}", `${values.releases}\n${RELEASES_END_MARKER}`)
-    .replaceAll("{{version}}", values.version);
+    .replaceAll("{{version}}", value(values.version));
   return applyOutputIndexLanguageSwitcher(rendered, values.languages);
 }
 
