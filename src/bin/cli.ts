@@ -23,7 +23,7 @@ import { existsSync } from "fs";
 import { resolve, join, dirname, relative } from "path";
 import clipboardy from "clipboardy";
 import ora from "ora";
-import type { GenerateResult, ProviderConfig, ProviderName, ReleaseNotesConfig } from "../types.js";
+import type { GenerateResult, PromptSource, ProviderConfig, ProviderName, ReleaseNotesConfig } from "../types.js";
 import { AI_RELEASE_NOTES_VERSION } from "../version.js";
 
 const CLI_VERSION = AI_RELEASE_NOTES_VERSION;
@@ -60,6 +60,12 @@ function printStatus(stdout: boolean, message: string): void {
   console.log(message);
 }
 
+/** Where a prompt comes from, for the verbose report. */
+function describePromptSource(source?: PromptSource): string {
+  if (!source) return "built-in defaults";
+  return typeof source === "string" ? "inline configuration" : `file ${source.file}`;
+}
+
 function printVerboseGenerationDetails(
   stdout: boolean,
   config: ReleaseNotesConfig,
@@ -68,15 +74,10 @@ function printVerboseGenerationDetails(
 ): void {
   const languages = config.prompt?.languages || ["en"];
   const instructions = config.prompt?.instructions;
-  const instructionSource = !instructions
-    ? "built-in defaults"
-    : typeof instructions === "string"
-      ? "inline configuration"
-      : `file ${instructions.file}`;
 
   printStatus(stdout, chalk.gray("\n🧭 Generation details"));
   printStatus(stdout, chalk.gray(`   Main language: ${languages[0]}`));
-  printStatus(stdout, chalk.gray(`   Instructions: ${instructionSource}`));
+  printStatus(stdout, chalk.gray(`   Instructions: ${describePromptSource(instructions)}`));
   if (languages.length > 1) {
     const mode = dryRun ? "configured" : "completed";
     printStatus(

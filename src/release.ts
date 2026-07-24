@@ -86,31 +86,6 @@ export function insertOrUpdateOutputIndexReleaseEntry(
   return existing.trimEnd() + "\n\n" + entry + "\n";
 }
 
-/**
- * Format the final release note with header.
- */
-export function formatReleaseNote(
-  llmOutput: string,
-  params: {
-    fromVersion: string;
-    toVersion: string;
-    environment: string;
-    date: string;
-    projectName?: string;
-  }
-): string {
-  const project = params.projectName ? `${params.projectName} · ` : "";
-  const header = `# ${project}Release ${params.toVersion}
-
-_${params.environment} · ${params.date} · Changes since ${params.fromVersion}_
-
----
-
-`;
-
-  return header + llmOutput.trim();
-}
-
 /** Render a release note inside an HTML template. */
 export function renderReleaseNoteHtml(
   template: string,

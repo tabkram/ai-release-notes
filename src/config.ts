@@ -13,6 +13,7 @@ import {
   ReleaseNotesConfigSchema,
   type ReleaseNotesConfig,
   type ProviderName,
+  type PromptSource,
 } from "./types.js";
 
 const GLOBAL_CONFIG_PATH = resolve(homedir(), ".ai-release-notes.yml");
@@ -55,11 +56,11 @@ export async function loadConfig(
   }
 
   const config = result.data;
-  const instructions = config.prompt?.instructions;
-  if (instructions && typeof instructions !== "string") {
-    // A config remains portable when its related files are resolved beside it.
-    instructions.file = resolve(dirname(configPath), instructions.file);
-  }
+  // A config remains portable when its related files are resolved beside it.
+  const configDir = dirname(configPath);
+  resolvePromptSourcePath(config.prompt?.instructions, configDir);
+  resolvePromptSourcePath(config.prompt?.system, configDir);
+  resolvePromptSourcePath(config.prompt?.user, configDir);
 
   return config;
 }
@@ -128,7 +129,7 @@ prompt:
   languages:
     - en
 
-  # Optional: create this file and uncomment these lines to add project rules.
+  # Optional: your writing rules, replacing the built-in ones.
   # instructions:
   #   file: ./.ai-release-instructions.md
 
@@ -155,6 +156,13 @@ outputIndex:
 // ─────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────
+
+/** Make a file-based prompt source point beside its config file. */
+function resolvePromptSourcePath(source: PromptSource | undefined, configDir: string): void {
+  if (source && typeof source === "object") {
+    source.file = resolve(configDir, source.file);
+  }
+}
 
 function findLocalConfig(): string | null {
   const cwd = process.cwd();

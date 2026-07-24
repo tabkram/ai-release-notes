@@ -156,9 +156,8 @@ The main parts are simple:
 - `projectName` gives the generated notes their product name.
 - `provider` chooses the AI provider; `providers` lets you set its model and
   generation options.
-- `prompt` selects the release languages and can point to an instructions file
-  when your team has writing rules. Its content replaces the built-in release
-  instructions through the `{{instructions}}` section.
+- `prompt` selects the release languages and where the writing rules come from.
+  See [Instructions](#instructions).
 - `output` lists the Markdown and/or HTML release files to create. Use
   `{env}`, `{lang}`, `{from}`, and `{to}` in their names. Missing `--from` and
   `--to` become `start` and `end`.
@@ -176,6 +175,49 @@ For the exact configuration and comments, see the annotated
 [example `.ai-release-notes.yml`](examples/.ai-release-notes.yml). The
 [examples guide](examples/README.md) then walks through a first run, writing
 instructions, templates, and output layouts.
+
+---
+
+## Instructions
+
+The release note is written entirely by the model: its title block, its summary,
+and its sections all come from the instructions. Built-in instructions apply
+until you write your own, so `generate` works with no configuration at all.
+
+`prompt.instructions` replaces the built-in rules with your own, as inline text
+or as a file resolved next to the config:
+
+```yaml
+prompt:
+  languages: [en, fr]
+  instructions:
+    file: ./.ai-release-instructions.md
+```
+
+That one file is the whole contract. A localized release goes through two
+prompts — the first language is generated from the changelog, the others are
+translated from it — and both receive it, so rules that matter only to one of
+them, such as a glossary or protected vocabulary, belong in a section of the
+same file.
+
+The prompts themselves can be replaced too. `system` sets the role and goal
+that precede the instructions; `user` sets how the release is described to the
+model, through these placeholders:
+
+```yaml
+prompt:
+  system:
+    file: ./.ai-release-system.md
+  user: |
+    {{projectName}} {{fromVersion}} → {{toVersion}} ({{environment}}, {{date}})
+
+    {{commitCount}} commits:
+    {{changelog}}
+    {{context}}
+```
+
+Whatever the model receives, `--dry-run` prints it without calling a provider,
+and `--verbose` reports which instructions were applied.
 
 ---
 

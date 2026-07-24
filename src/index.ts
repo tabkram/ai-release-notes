@@ -33,10 +33,11 @@ export {
 export {
   buildSystemPrompt,
   buildUserPrompt,
+  resolveInstructions,
+  resolvePromptSource,
 } from "./prompts/builder.js";
 
 export {
-  formatReleaseNote,
   renderReleaseNoteHtml,
   markdownToHtml,
 } from "./release.js";
@@ -53,5 +54,7 @@ export type {
   GenerateOptions,
   GenerateResult,
   PromptConfig,
+  PromptSource,
+  InstructionsConfig,
   ContextFile,
 } from "./types.js";

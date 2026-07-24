@@ -33,9 +33,13 @@ prompt:
   languages:
     - en
 
-  # Optional: create this file and uncomment to add project writing rules.
+  # Optional: your writing rules, replacing the built-in ones.
   # instructions:
   #   file: ./.ai-release-instructions.md
+
+  # Optional: replace the built-in prompts themselves.
+  # system:
+  #   file: ./.ai-release-system.md
 
 # ─────────────────────────────────────────
 # Output settings
