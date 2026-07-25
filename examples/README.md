@@ -25,7 +25,9 @@ npx ai-release-notes generate \
 
 Omitting `--from` is the same as passing `--from start`: both include the
 full Git history through the `--to` ref. Pass a tag or ref to `--from` when
-you only want the commits after that point.
+you only want the commits after that point. With no previous version to compare
+against, the release note says `First release` where that comparison would go,
+and `{from}` in a file name becomes `start`.
 
 The example writes one release file and updates a shared output index. It
 reports those file paths in the terminal. Use `--stdout` when you want to
@@ -114,15 +116,20 @@ _Generated with ai-release-notes v{{version}}._
 Write the surrounding text freely. For an `_es` index, the CLI translates the
 template text while preserving `{{projectName}}`, `{{environment}}`,
 `{{languages}}`, `{{releases}}`, and `{{version}}`. Keep the
-`ai-release-notes:releases` marker: new release links are inserted directly
-below it.
+`ai-release-notes:releases` marker and the `{{releases}}` token: together they
+open the release list. A matching `<!-- ai-release-notes:/releases -->` is
+written for you where the list ends, and from then on those two lines bound the
+part of the file the tool rewrites. Everything outside them stays yours.
 
 `{{languages}}` renders links to every localized index in Markdown and styled
 buttons in HTML, with the current language highlighted. Put the token on its
 own line at the desired content position in a custom index template. The
-spelling `{{langages}}` is also accepted. The switcher is available when the
-index path contains `{lang}`, so each configured language has a sibling index
-to link to. Previously generated sibling indexes are discovered too: if `en`
+spelling `{{langages}}` is also accepted. The slot is spent the first time the
+index is written: afterwards the switcher is recognized by the markup it was
+rendered as, so a published page carries a switcher and no marker of ours. The
+switcher is available when the index path contains `{lang}`, so each configured
+language has a sibling index to link to; with a single language, nothing is
+rendered. Previously generated sibling indexes are discovered too: if `en`
 already exists and the current prompt contains `[fr, it]`, every index links to
 `en`, `fr`, and `it`. Remove an old localized index file when it should no
 longer appear.
@@ -171,3 +178,54 @@ outputIndex:
 This creates a release file and an output index per language. The default index
 template includes the language switcher; a custom template can position it with
 `{{languages}}` or `{{langages}}`.
+
+## 5. Decide what one listed release shows
+
+The index template writes the page around the list; an *entry* template writes
+one release inside it. The bundled Markdown one is five lines:
+
+```md
+## Release {{toVersion}}
+
+_{{environment}} · {{date}} · Changes since {{fromVersion}}_
+
+[Read release notes →]({{href}})
+```
+
+The slots are `{{environment}}`, `{{date}}`, `{{fromVersion}}`, `{{toVersion}}`
+and `{{href}}`. Every other word — the label `Release`, the separators, the link
+text — is the template's, so replacing the file replaces the wording:
+
+```yaml
+outputIndex:
+  format: markdown
+  saveTo: ./releases/RELEASE_INDEX_{env}_{lang}.md
+  entryTemplate: ./.ai-index-entry-template.md
+```
+
+The file is read on every run, and each listed release stores what the index
+knows about it — environment, versions, date, link — in a comment marker beside
+it. The whole list is rendered again from those records at each generation, so
+editing the entry template, or generating the index in another language,
+relabels the entire history rather than only the release being added.
+
+An entry that carries no record is kept word for word below the rendered ones,
+since there is nothing to render it from.
+
+## 6. Restyle the release page
+
+An HTML release note is rendered inside `templates/default-release-note.html`.
+That file owns the whole page — its `<title>`, its footer, its styles — and
+nothing is added around it. Copy it, edit it, and point `template` at your copy:
+
+```yaml
+output:
+  - format: html
+    saveTo: ./releases/RELEASE_NOTES_{env}_{from}_{to}.html
+    template: ./.ai-release-page.html
+```
+
+The slots filled in a page template are `{{content}}`, `{{projectName}}`,
+`{{fromVersion}}`, `{{toVersion}}`, `{{environment}}`, `{{date}}` and
+`{{version}}`. Anything else is left exactly as written, so the page title
+belongs in the template's own `<title>`.

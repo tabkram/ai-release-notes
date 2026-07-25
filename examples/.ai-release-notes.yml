@@ -58,3 +58,7 @@ outputIndex:
   # template: ./.ai-output-index-template.md
   # A template is assumed to be written in the first prompt.languages entry, and
   # an index in any other language is translated.
+  #
+  # Optional: the shape of one listed release, with {{environment}}, {{date}},
+  # {{fromVersion}}, {{toVersion}} and {{href}}. Every other word is yours.
+  # entryTemplate: ./.ai-index-entry-template.md
