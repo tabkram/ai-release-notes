@@ -272,6 +272,9 @@ program
       const outputIndexConfigs = loadedConfig.outputIndex
         ? (Array.isArray(loadedConfig.outputIndex) ? loadedConfig.outputIndex : [loadedConfig.outputIndex])
         : [];
+      // An index template is written in the language the release is generated
+      // in, so prompt.languages already answers this.
+      const primaryLanguage = generatedResult.localized[0]?.language ?? "en";
       const outputIndexTargets: OutputIndexTarget[] = outputIndexConfigs.flatMap((outputIndex, groupId) =>
         outputIndex.saveTo.includes("{lang}")
           ? generatedResult.localized.map((release) => ({
@@ -280,14 +283,14 @@ program
               language: release.language,
               format: outputIndex.format,
               templatePath: outputIndex.template,
-              templateLanguage: outputIndex.templateLanguage,
+              templateLanguage: primaryLanguage,
             }))
           : [{
               path: resolve(getOutputPath(outputIndex.saveTo, opts.env, undefined, opts.from, opts.to)),
               groupId,
               format: outputIndex.format,
               templatePath: outputIndex.template,
-              templateLanguage: outputIndex.templateLanguage,
+              templateLanguage: primaryLanguage,
             }]
       );
       if (outputIndexTargets.some((index) => outputTargets.some((target) => resolve(target.path) === index.path))) {
@@ -977,9 +980,12 @@ function formatDuration(durationMs: number): string {
 }
 
 async function saveReleaseNotes(outputPath: string, content: string, markdown: string): Promise<"saved" | "skipped"> {
-  const header = markdown.split("\n", 1)[0];
   const existing = existsSync(outputPath) ? await readFile(outputPath, "utf-8") : "";
-  if (existing.includes(header)) return "skipped";
+  // Probe the form that was actually written: a Markdown heading line never
+  // appears in rendered HTML, so comparing one against the other reports every
+  // regeneration as new and appends a second copy of the same release.
+  const header = releaseIdentityProbe(outputPath, content, markdown);
+  if (header && existing.includes(header)) return "skipped";
 
   const merged = outputPath.endsWith(".html")
     ? appendHtmlRelease(existing, content)
@@ -988,6 +994,23 @@ async function saveReleaseNotes(outputPath: string, content: string, markdown: s
       : content.trim() + "\n";
   await writeFile(outputPath, merged, "utf-8");
   return "saved";
+}
+
+/**
+ * The line that identifies a release inside the file being written.
+ *
+ * For HTML that is the rendered title heading; for Markdown, the first line.
+ * Returns an empty string when neither is available, which saves rather than
+ * risks discarding a release as a false duplicate.
+ */
+function releaseIdentityProbe(outputPath: string, content: string, markdown: string): string {
+  if (!outputPath.endsWith(".html")) return markdown.split("\n", 1)[0];
+
+  const heading = /<h([12])>[\s\S]*?<\/h\1>/.exec(content);
+  if (heading) return heading[0];
+
+  const title = /<title>[\s\S]*?<\/title>/.exec(content);
+  return title ? title[0] : "";
 }
 
 function appendHtmlRelease(existing: string, content: string): string {

@@ -56,3 +56,5 @@ outputIndex:
   # Optional: create this file and uncomment to customize the index layout.
   # With {lang} in saveTo, use {{languages}} (or {{langages}}) for index links.
   # template: ./.ai-output-index-template.md
+  # A template is assumed to be written in the first prompt.languages entry, and
+  # an index in any other language is translated.

@@ -45,6 +45,23 @@ test("replaces the built-in instructions with the project ones", async () => {
   assert.doesNotMatch(prompt, /Write the title block exactly once/);
 });
 
+test("asks for an unwrapped answer even when a project's instructions are silent about format", async () => {
+  const instructions = "Keep ENVIRO exactly as written.";
+
+  const generation = await buildSystemPrompt({ languages: ["en"], instructions });
+  const translation = await buildTranslationSystemPrompt("fr", instructions);
+
+  // The prompt files are hard-wrapped at different points, so compare on text
+  // with its line breaks collapsed rather than on the wrapping of the day.
+  const flatten = (value: string) => value.replace(/\s+/g, " ");
+
+  for (const prompt of [generation, translation].map(flatten)) {
+    assert.match(prompt, /Never wrap it in a code fence/);
+    // The rule closes the prompt, so project instructions cannot displace it.
+    assert.ok(prompt.indexOf("Never wrap it in a code fence") > prompt.indexOf(instructions));
+  }
+});
+
 test("reads instructions and system prompt from files", async () => {
   const instructionsFile = await writeTempFile("rules.md", "Mention the migration guide.");
   const systemFile = await writeTempFile("system.md", "You write terse notes.");

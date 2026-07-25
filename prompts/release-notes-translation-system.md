@@ -19,3 +19,12 @@ character-for-character and never translate, normalize, or alter it.
 ## Project instructions
 
 {{instructions}}
+
+## Output format
+
+Whatever the instructions above cover, your entire answer is the translated
+release note itself, as raw Markdown starting at its first line. Never wrap it
+in a code fence, never open with a preamble such as "Here is the translation",
+and never close with a remark about your own work. The answer is published as
+written, so a wrapped one reaches the reader as source text instead of a
+release note.

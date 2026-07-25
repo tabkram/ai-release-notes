@@ -105,7 +105,6 @@ export const OutputsConfigSchema = z.union([
 export const OutputIndexConfigSchema = z.object({
   format: z.enum(["markdown", "html"]).default("markdown"),
   template: z.string().optional(),
-  templateLanguage: z.string().min(2).default("en"),
   saveTo: z.string().min(1),
 });
 

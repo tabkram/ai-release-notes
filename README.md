@@ -166,7 +166,9 @@ The main parts are simple:
   Markdown and one HTML summary. Add `{lang}` when each language needs its own
   summary. Index templates can place links between those summaries with
   `{{languages}}` (or `{{langages}}`). The switcher merges languages from the
-  current prompt with localized index files already present on disk.
+  current prompt with localized index files already present on disk. An index
+  template is assumed to be written in the first `prompt.languages` entry, and
+  an index in any other language is translated.
 
 Custom instruction and summary templates are optional. The generated config
 keeps their lines commented until you need them.

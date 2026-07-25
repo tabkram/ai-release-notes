@@ -27,6 +27,39 @@ export class GenerationError extends Error {
 }
 
 /**
+ * Unwrap a release note the model returned inside a code fence.
+ *
+ * Models routinely present a whole Markdown document as ```markdown … ```,
+ * sometimes more than once. Left in place, that fence is faithfully rendered as
+ * one big <pre><code> block: the reader gets the Markdown source instead of the
+ * release note. Only a fence enclosing the entire document is removed, so a
+ * fence used inside a note is still rendered as code.
+ */
+export function stripEnclosingCodeFence(markdown: string): string {
+  let current = markdown.trim();
+
+  // A doubly wrapped document needs more than one pass; the bound keeps a
+  // pathological response from looping.
+  for (let pass = 0; pass < 3; pass += 1) {
+    const lines = current.split("\n");
+    if (lines.length < 2) return current;
+
+    const opening = /^(`{3,}|~{3,})[ \t]*[\w+-]*[ \t]*$/.exec(lines[0].trim());
+    if (!opening) return current;
+
+    // Without a matching closing fence on the very last line, the fence belongs
+    // to the content rather than wrapping it.
+    const marker = opening[1][0];
+    const closing = new RegExp(`^\\${marker}{${opening[1].length},}[ \t]*$`);
+    if (!closing.test(lines[lines.length - 1].trim())) return current;
+
+    current = lines.slice(1, -1).join("\n").trim();
+  }
+
+  return current;
+}
+
+/**
  * Generate release notes from git tags.
  * Main entry point for programmatic usage.
  */
@@ -154,7 +187,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   try {
     const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt);
     addUsage(usage, llmResult.usage);
-    primaryMarkdown = llmResult.text.trim();
+    primaryMarkdown = stripEnclosingCodeFence(llmResult.text);
 
     const translationInstructions = await resolveInstructions(config.prompt?.instructions);
     for (const language of languages.slice(1)) {
@@ -165,7 +198,10 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
         primaryMarkdown
       );
       addUsage(usage, translatedRelease.usage);
-      translatedReleases.push({ language, markdown: translatedRelease.text.trim() });
+      translatedReleases.push({
+        language,
+        markdown: stripEnclosingCodeFence(translatedRelease.text),
+      });
     }
   } catch (error) {
     usage.durationMs = Date.now() - startedAt;
