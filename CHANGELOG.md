@@ -1,3 +1,13 @@
+## [0.3.0](https://github.com/tabkram/ai-release-notes/compare/v0.2.0...v0.3.0) (2026-07-25)
+
+### ⚠ BREAKING CHANGES
+
+* markdownToHtml no longer takes title or footer args, and {{title}} is not filled.
+
+### Features
+
+* add canary versioning and improve npm publishing ([b124760](https://github.com/tabkram/ai-release-notes/commit/b12476046c5e416da2a0923eab967db91ca83093))
+* let templates own every word of a generated page ([734cf2e](https://github.com/tabkram/ai-release-notes/commit/734cf2e78e91b721e00c21acc5d94469332dbe2b))
 ## [0.2.0](https://github.com/tabkram/ai-release-notes/compare/v0.1.0...v0.2.0) (2026-07-25)
 
 ### Bug Fixes
