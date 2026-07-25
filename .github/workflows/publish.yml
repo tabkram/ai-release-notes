@@ -2,7 +2,7 @@ name: Publish to NPM
 
 on:
   release:
-    types: [created]
+    types: [published]
 
 permissions:
   contents: read
@@ -49,5 +49,17 @@ jobs:
             exit 1
           fi
 
+      - name: Verify trusted publishing prerequisites
+        run: |
+          echo "npm $(npm --version) on node $(node --version)"
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::No OIDC token available. Trusted publishing needs 'id-token: write' permission."
+            exit 1
+          fi
+
       - name: Publish package to npm
-        run: npm publish
+        run: |
+          if ! npm publish; then
+            echo "::error::npm publish failed. An E404 on PUT means npm rejected the credentials, not that the package is missing: confirm the trusted publisher on npmjs.com (package ai-release-notes -> Settings -> Trusted publisher -> GitHub Actions, repository tabkram/ai-release-notes, workflow publish.yml)."
+            exit 1
+          fi
