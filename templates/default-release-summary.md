@@ -4,6 +4,7 @@ A concise release history for {{environment}}. The newest release is listed firs
 
 {{languages}}
 
+<!-- Where the releases are listed, the newest one first. -->
 <!-- ai-release-notes:releases -->
 {{releases}}
 

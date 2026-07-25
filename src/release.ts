@@ -3,14 +3,187 @@
  */
 
 import { AI_RELEASE_NOTES_VERSION } from "./version.js";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 
-const OUTPUT_INDEX_LANGUAGES_MARKER = "<!-- ai-release-notes:languages -->";
-const OUTPUT_INDEX_LANGUAGES_END_MARKER = "<!-- ai-release-notes:/languages -->";
+export const RELEASES_MARKER = "<!-- ai-release-notes:releases -->";
+export const RELEASES_END_MARKER = "<!-- ai-release-notes:/releases -->";
 
 export interface OutputIndexLanguageLink {
   language: string;
   href: string;
   active: boolean;
+}
+
+/**
+ * The shape of one index entry: markup with `{{slot}}` placeholders.
+ *
+ * Every word of an entry comes from a template, so no label is spelled out in
+ * this codebase and a translated template carries its own translated labels.
+ */
+export type OutputIndexEntryTemplate = string;
+
+/** Replace `{{slot}}` occurrences, leaving an unknown slot visible. */
+export function fillTemplateSlots(template: string, values: Record<string, string>): string {
+  return template.replace(
+    /\{\{\s*(\w+)\s*\}\}/g,
+    (match, key: string) => values[key] ?? match
+  );
+}
+
+/**
+ * What an index knows about one release.
+ *
+ * It is stored in the entry's own marker, so the whole list can be rendered
+ * again from the current template: change the template or the language, and
+ * every release is relabelled at the next run.
+ */
+export interface OutputIndexReleaseRecord {
+  environment: string;
+  fromVersion: string;
+  toVersion: string;
+  /** As supplied by git, unlocalized: the reader's language decides its form. */
+  date: string;
+  /** The release notes, relative to the index. */
+  href: string;
+}
+
+/** What identifies a release inside an index, whatever its wording. */
+export function outputIndexReleaseId(record: OutputIndexReleaseRecord): string {
+  return [record.environment, record.fromVersion, record.toVersion]
+    .map((value) => encodeURIComponent(value))
+    .join("_");
+}
+
+/** Render one index entry, record marker included, by filling the template. */
+export function renderOutputIndexReleaseEntry(params: {
+  record: OutputIndexReleaseRecord;
+  entryTemplate: OutputIndexEntryTemplate;
+  format: "markdown" | "html";
+  /** The date as the index shows it, already in the reader's language. */
+  date: string;
+}): string {
+  const { record } = params;
+  // An environment, a version, a date and a path reach an HTML index from
+  // config, the command line and git, so every value the template receives is
+  // escaped there.
+  const value = (raw: string) => (params.format === "html" ? escapeHtml(raw) : raw);
+  const entry = fillTemplateSlots(params.entryTemplate, {
+    environment: value(record.environment),
+    date: value(params.date),
+    fromVersion: value(record.fromVersion),
+    toVersion: value(record.toVersion),
+    href: value(record.href),
+  });
+  return `<!-- ai-release-notes:release ${serializeReleaseRecord(record)} -->\n${entry}`;
+}
+
+/**
+ * A record as it is written inside its comment marker.
+ *
+ * `--` ends an HTML comment, so a value carrying one would close the marker and
+ * spill the rest into the page. Escaping it keeps the JSON valid and lossless:
+ * the parser turns the escape back into a dash.
+ */
+function serializeReleaseRecord(record: OutputIndexReleaseRecord): string {
+  return JSON.stringify(record).replaceAll("--", "\\u002d\\u002d");
+}
+
+const RELEASE_MARKER = /<!--\s*ai-release-notes:release\s+([^>]*?)\s*-->/g;
+const RELEASE_RECORD_MARKER = /<!--\s*ai-release-notes:release\s+(\{[\s\S]*?\})\s*-->/g;
+
+/** Read the release records an index carries, in the order it lists them. */
+export function readOutputIndexReleaseRecords(content: string): OutputIndexReleaseRecord[] {
+  return [...content.matchAll(RELEASE_RECORD_MARKER)].flatMap((match) => {
+    try {
+      const parsed: unknown = JSON.parse(match[1]);
+      return isOutputIndexReleaseRecord(parsed) ? [parsed] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function isOutputIndexReleaseRecord(value: unknown): value is OutputIndexReleaseRecord {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return ["environment", "fromVersion", "toVersion", "date", "href"]
+    .every((key) => typeof candidate[key] === "string");
+}
+
+/**
+ * Place a release among the ones an index already lists.
+ *
+ * A release it already knows keeps its position; a new one opens the list,
+ * which is ordered newest first.
+ */
+export function upsertOutputIndexReleaseRecord(
+  records: OutputIndexReleaseRecord[],
+  record: OutputIndexReleaseRecord
+): OutputIndexReleaseRecord[] {
+  const id = outputIndexReleaseId(record);
+  const index = records.findIndex((candidate) => outputIndexReleaseId(candidate) === id);
+  if (index < 0) return [record, ...records];
+  return records.map((candidate, position) => (position === index ? record : candidate));
+}
+
+/** Render every entry of an index, newest first. */
+export function renderOutputIndexReleases(params: {
+  records: OutputIndexReleaseRecord[];
+  entryTemplate: OutputIndexEntryTemplate;
+  format: "markdown" | "html";
+  localizeDate: (date: string) => string;
+}): string {
+  return params.records
+    .map((record) => renderOutputIndexReleaseEntry({
+      record,
+      entryTemplate: params.entryTemplate,
+      format: params.format,
+      date: params.localizeDate(record.date),
+    }))
+    .join("\n");
+}
+
+/**
+ * Entries an index lists without a record, kept word for word.
+ *
+ * They come from a version that stored no release data, so there is nothing to
+ * render them from. Rewriting them would mean inventing what they said.
+ */
+export function readLegacyOutputIndexEntries(
+  content: string,
+  renderedIds: string[]
+): string[] {
+  const markers = [...content.matchAll(RELEASE_MARKER)];
+  return markers.flatMap((match, position) => {
+    const payload = match[1];
+    // An entry that carries a record is rendered from it, and one whose id is
+    // now rendered from a record would otherwise be listed twice.
+    if (payload.startsWith("{") || renderedIds.includes(payload)) return [];
+    const end = markers[position + 1]?.index ?? content.length;
+    return [content.slice(match.index, end).trimEnd()];
+  });
+}
+
+/** The listed releases of an index, between its release markers. */
+export function readOutputIndexReleasesRegion(content: string): string {
+  const start = content.indexOf(RELEASES_MARKER);
+  if (start < 0) return "";
+  const from = start + RELEASES_MARKER.length;
+  const end = content.indexOf(RELEASES_END_MARKER, from);
+  return content.slice(from, end < 0 ? undefined : end);
+}
+
+/** Put a freshly rendered list of releases in place of the listed ones. */
+export function replaceOutputIndexReleases(content: string, releases: string): string {
+  const region = `${RELEASES_MARKER}\n${releases}\n${RELEASES_END_MARKER}`;
+  const start = content.indexOf(RELEASES_MARKER);
+  if (start < 0) return `${content.trimEnd()}\n\n${region}\n`;
+
+  const end = content.indexOf(RELEASES_END_MARKER, start + RELEASES_MARKER.length);
+  return end < 0
+    ? content.slice(0, start) + region + content.slice(start + RELEASES_MARKER.length)
+    : content.slice(0, start) + region + content.slice(end + RELEASES_END_MARKER.length);
 }
 
 /** Render links between the localized variants of an output index. */
@@ -21,9 +194,9 @@ export function renderOutputIndexLanguageSwitcher(
   const uniqueLinks = links.filter((link, index) =>
     links.findIndex((candidate) => candidate.language === link.language) === index
   );
-  if (uniqueLinks.length < 2) {
-    return `${OUTPUT_INDEX_LANGUAGES_MARKER}\n${OUTPUT_INDEX_LANGUAGES_END_MARKER}`;
-  }
+  // One language is no choice to offer, so the slot is emptied rather than
+  // filled: an index that lists a single language shows no switcher at all.
+  if (uniqueLinks.length < 2) return "";
 
   const options = uniqueLinks.map((link) => {
     const label = link.language.toUpperCase();
@@ -38,52 +211,42 @@ export function renderOutputIndexLanguageSwitcher(
       : `[${escapeMarkdownLabel(label)}](${href})`;
   });
 
-  const selector = format === "html"
+  return format === "html"
     ? `<nav class="language-switcher" aria-label="Languages">\n${options.join("\n")}\n</nav>`
     : options.join(" · ");
-
-  return `${OUTPUT_INDEX_LANGUAGES_MARKER}\n${selector}\n${OUTPUT_INDEX_LANGUAGES_END_MARKER}`;
 }
 
-/** Replace either supported template token, or refresh an existing switcher block. */
+/**
+ * Where a language switcher goes, and what it replaces once it is there.
+ *
+ * A template says where with `{{languages}}`, and that slot is spent the first
+ * time an index is written. From then on the switcher is found by the markup it
+ * was rendered as — a `nav` in HTML, a line of language links in Markdown — so
+ * a page carries a switcher rather than a marker telling the tool where one is.
+ */
+const LANGUAGE_SWITCHER = new RegExp([
+  String.raw`\{\{\s*(?:languages|langages)\s*\}\}`,
+  String.raw`[ \t]*<nav class="language-switcher"[\s\S]*?<\/nav>`,
+  // Two options at least: a lone link is a link, not a switcher.
+  String.raw`^(?:\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)\s]+\))(?: · (?:\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)\s]+\)))+$`,
+].join("|"), "m");
+
+/** Put the switcher in the slot a template offers, or over the one on the page. */
 export function applyOutputIndexLanguageSwitcher(
   content: string,
   switcher: string
 ): string {
-  const languageSlot = /<!-- ai-release-notes:languages -->[\s\S]*?<!-- ai-release-notes:\/languages -->|\{\{languages\}\}|\{\{langages\}\}/g;
   let rendered = false;
-  return content.replace(languageSlot, () => {
+  return content.replace(new RegExp(LANGUAGE_SWITCHER.source, "gm"), () => {
     if (rendered) return "";
     rendered = true;
     return switcher;
   });
 }
 
-/** Whether an index already provides a generated switcher region or template slot. */
+/** Whether an index offers a slot for a switcher, or already shows one. */
 export function hasOutputIndexLanguageSwitcher(content: string): boolean {
-  return /<!-- ai-release-notes:languages -->[\s\S]*?<!-- ai-release-notes:\/languages -->|\{\{languages\}\}|\{\{langages\}\}/.test(content);
-}
-
-/** Insert a new index entry or replace the matching release without consuming later template content. */
-export function insertOrUpdateOutputIndexReleaseEntry(
-  existing: string,
-  entry: string,
-  releaseId: string
-): string {
-  const marker = `<!-- ai-release-notes:release ${releaseId} -->`;
-  const entryPattern = new RegExp(
-    `${escapeRegExp(marker)}[\\s\\S]*?` +
-    `(?=(?:<br>)?\\s*<!-- ai-release-notes:(?:release [^>]+|/releases|languages) -->|` +
-    `\\n\\s*(?:---\\s*\\n|</main>|<footer\\b)|$)`
-  );
-  if (entryPattern.test(existing)) {
-    return existing.replace(entryPattern, entry);
-  }
-  const releasesMarker = "<!-- ai-release-notes:releases -->";
-  if (existing.includes(releasesMarker)) {
-    return existing.replace(releasesMarker, `${releasesMarker}\n${entry}`);
-  }
-  return existing.trimEnd() + "\n\n" + entry + "\n";
+  return LANGUAGE_SWITCHER.test(content);
 }
 
 /** Render a release note inside an HTML template. */
@@ -98,20 +261,39 @@ export function renderReleaseNoteHtml(
     projectName?: string;
   }
 ): string {
-  const title = `${params.projectName ? params.projectName + " · " : ""}Release ${params.toVersion}`;
-  return template
-    .replaceAll("{{title}}", escapeHtml(title))
-    .replaceAll("{{projectName}}", escapeHtml(params.projectName || ""))
-    .replaceAll("{{fromVersion}}", escapeHtml(params.fromVersion))
-    .replaceAll("{{toVersion}}", escapeHtml(params.toVersion))
-    .replaceAll("{{environment}}", escapeHtml(params.environment))
-    .replaceAll("{{date}}", escapeHtml(params.date))
-    .replaceAll("{{version}}", AI_RELEASE_NOTES_VERSION)
-    .replaceAll("{{content}}", renderMarkdown(content));
+  // One pass over the template, so a `{{slot}}` the model wrote into the note
+  // is left where it stands instead of being filled in turn.
+  return fillTemplateSlots(template, {
+    projectName: escapeHtml(params.projectName || ""),
+    fromVersion: escapeHtml(params.fromVersion),
+    toVersion: escapeHtml(params.toVersion),
+    environment: escapeHtml(params.environment),
+    date: escapeHtml(params.date),
+    version: AI_RELEASE_NOTES_VERSION,
+    content: renderMarkdown(content),
+  });
+}
+
+/** The bundled release-note template, the shell every generated page shares. */
+export const DEFAULT_RELEASE_NOTE_TEMPLATE_PATH = resolve(
+  __dirname,
+  "../templates/default-release-note.html"
+);
+
+let bundledReleaseNoteTemplate: string | undefined;
+
+/** Read the bundled template once: the same shell serves every page of a run. */
+function loadBundledReleaseNoteTemplate(): string {
+  bundledReleaseNoteTemplate ??= readFileSync(DEFAULT_RELEASE_NOTE_TEMPLATE_PATH, "utf-8");
+  return bundledReleaseNoteTemplate;
 }
 
 /**
  * Convert Markdown to self-contained, browser-friendly HTML.
+ *
+ * The page is the bundled release-note template, so how a generated page looks
+ * is edited in that file rather than spelled out here. Its title and its footer
+ * are part of the template too: a template of your own carries its own wording.
  *
  * Raw HTML is escaped unless the caller vouches for the Markdown. Only content
  * this tool composed itself — an output index and its language switcher — is
@@ -119,55 +301,12 @@ export function renderReleaseNoteHtml(
  */
 export function markdownToHtml(
   markdown: string,
-  title = "Release Notes",
-  footer = "",
   options: { trustedHtml?: boolean } = {}
 ): string {
-  const html = renderMarkdown(markdown, options.trustedHtml === true);
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title>
-<style>
-:root { color-scheme: light dark; --page: #ffffff; --surface: #f6f7f8; --text: #202124; --muted: #5f6368; --line: #d9dde3; --link: #1558d6; }
-@media (prefers-color-scheme: dark) { :root { --page: #181a1b; --surface: #242729; --text: #e8eaed; --muted: #b8bec5; --line: #3c4043; --link: #8ab4f8; } }
-* { box-sizing: border-box; }
-html { background: var(--page); }
-body { max-width: 54rem; margin: 0 auto; padding: 3rem 1.5rem; background: var(--page); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 1rem; line-height: 1.65; }
-main { min-width: 0; }
-h1, h2, h3, h4, h5, h6 { color: var(--text); line-height: 1.25; letter-spacing: -0.015em; }
-h1 { margin: 0 0 1.75rem; font-size: clamp(1.9rem, 4vw, 2.6rem); }
-h2 { margin: 2.25rem 0 0.85rem; padding-bottom: 0.45rem; border-bottom: 1px solid var(--line); font-size: 1.4rem; }
-h3 { margin: 1.75rem 0 0.65rem; font-size: 1.1rem; }
-h4 { margin: 1.5rem 0 0.55rem; font-size: 1rem; }
-h5, h6 { margin: 1.25rem 0 0.45rem; font-size: 0.95rem; }
-p { margin: 0.85rem 0; }
-section { margin: 2rem 0; }
-.release-entry { margin: 1.25rem 0; padding: 1.35rem 1.5rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--surface); }
-.release-entry h2 { margin: 0; padding: 0; border: 0; font-size: 1.2rem; }
-.release-meta { margin: 0.45rem 0 1rem; color: var(--muted); font-size: 0.925rem; }
-.release-link { margin: 0; font-weight: 600; }
-ul, ol { margin: 0.85rem 0; padding-left: 1.35rem; }
-li + li { margin-top: 0.35rem; }
-a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
-a:hover { text-decoration-thickness: 2px; }
-blockquote { margin: 1.25rem 0; padding: 0.15rem 0 0.15rem 1rem; border-left: 3px solid var(--line); color: var(--muted); }
-code { padding: 0.12em 0.35em; border-radius: 0.3rem; background: var(--surface); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
-pre { margin: 1.25rem 0; padding: 1rem; overflow-x: auto; border: 1px solid var(--line); border-radius: 0.6rem; background: var(--surface); }
-pre code { padding: 0; background: none; font-size: 0.875rem; }
-hr { height: 1px; margin: 2.5rem 0; border: 0; background: var(--line); }
-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.875rem; }
-</style>
-</head>
-<body>
-<main>
-${html}
-${footer}
-</main>
-</body>
-</html>`;
+  return fillTemplateSlots(loadBundledReleaseNoteTemplate(), {
+    content: renderMarkdown(markdown, options.trustedHtml === true),
+    version: AI_RELEASE_NOTES_VERSION,
+  });
 }
 
 function renderMarkdown(markdown: string, trustedHtml = false): string {
@@ -333,6 +472,3 @@ function escapeMarkdownLabel(value: string): string {
   return value.replace(/[\\[\]*_`]/g, "\\$&");
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}

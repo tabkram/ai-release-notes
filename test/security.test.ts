@@ -48,8 +48,10 @@ test("refuses a scripting scheme in a release-note link", () => {
 
 test("ignores control characters when reading a link scheme", () => {
   const html = markdownToHtml("- Fixed [thing](java\tscript:steal())");
+  // The page itself links to the tool, so only the rendered note is read here.
+  const note = html.slice(html.indexOf("<main>"), html.indexOf("</main>"));
 
-  assert.doesNotMatch(html, /<a href=/);
+  assert.doesNotMatch(note, /<a href=/);
 });
 
 test("keeps links that stay on a safe scheme", () => {
@@ -63,7 +65,7 @@ test("keeps links that stay on a safe scheme", () => {
 });
 
 test("passes through markup only for content this tool composed", () => {
-  const trusted = markdownToHtml('<nav class="language-switcher">x</nav>', "t", "", {
+  const trusted = markdownToHtml('<nav class="language-switcher">x</nav>', {
     trustedHtml: true,
   });
 

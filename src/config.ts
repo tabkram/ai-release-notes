@@ -148,6 +148,9 @@ outputIndex:
   # Optional: create this file and uncomment to customize the index layout.
   # With {lang} in saveTo, use {{languages}} (or {{langages}}) for index links.
   # template: ./.ai-output-index-template.md
+  # Optional: the shape of one listed release, with {{environment}}, {{date}},
+  # {{fromVersion}}, {{toVersion}} and {{href}}. Every other word is yours.
+  # entryTemplate: ./.ai-index-entry-template.md
 `;
 
   await writeFile(targetPath, defaultConfig, "utf-8");

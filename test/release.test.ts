@@ -1,12 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   applyOutputIndexLanguageSwitcher,
-  insertOrUpdateOutputIndexReleaseEntry,
+  hasOutputIndexLanguageSwitcher,
   markdownToHtml,
+  outputIndexReleaseId,
+  readLegacyOutputIndexEntries,
+  readOutputIndexReleaseRecords,
+  readOutputIndexReleasesRegion,
   renderOutputIndexLanguageSwitcher,
+  renderOutputIndexReleases,
+  replaceOutputIndexReleases,
+  upsertOutputIndexReleaseRecord,
+  type OutputIndexEntryTemplate,
   renderReleaseNoteHtml,
 } from "../src/release.js";
+import { AI_RELEASE_NOTES_VERSION } from "../src/version.js";
+
+function bundledEntryFile(format: "markdown" | "html"): Promise<string> {
+  const extension = format === "html" ? "html" : "md";
+  return readFile(
+    resolve(import.meta.dirname, `../templates/default-release-summary-entry.${extension}`),
+    "utf-8"
+  );
+}
+
+async function bundledEntryTemplate(format: "markdown" | "html") {
+  return (await bundledEntryFile(format)).trim();
+}
 
 const template = "<main>{{content}}</main>";
 const params = {
@@ -49,16 +72,17 @@ test("renders underscore emphasis and thematic breaks", () => {
 test("renders the package version in a release-note template", () => {
   const html = renderReleaseNoteHtml("<footer>v{{version}}</footer>{{content}}", "Release content", params);
 
-  assert.match(html, /<footer>v1\.0\.0<\/footer>/);
+  assert.match(html, new RegExp(`<footer>v${AI_RELEASE_NOTES_VERSION.replace(/\./g, "\\.")}</footer>`));
   assert.doesNotMatch(html, /{{version}}/);
 });
 
-test("can place a template-defined footer in generated HTML", () => {
-  const footer = '<footer>Generated with <a href="https://github.com/tabkram/ai-release-notes">tabkram/ai-release-notes</a></footer>';
-  const html = markdownToHtml("Release content", "Release", footer);
+test("the page title and the footer are the template's own words", () => {
+  const html = markdownToHtml("Release content");
 
-  assert.match(html, new RegExp(footer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.ok(html.indexOf(footer) < html.indexOf("</main>"));
+  assert.match(html, /<title>Release notes<\/title>/);
+  assert.match(html, /<footer>[\s\S]*ai-release-notes[\s\S]*<\/footer>/);
+  // Nothing of either is spelled out in code, so neither takes a slot.
+  assert.doesNotMatch(html, /\{\{title\}\}|\{\{footer\}\}/);
 });
 
 test("renders Markdown links between localized output indexes", () => {
@@ -67,9 +91,8 @@ test("renders Markdown links between localized output indexes", () => {
     { language: "fr", href: "RELEASE_INDEX_PROD_fr.md", active: false },
   ]);
 
-  assert.match(switcher, /<!-- ai-release-notes:languages -->/);
-  assert.match(switcher, /\*\*EN\*\* · \[FR\]\(RELEASE_INDEX_PROD_fr\.md\)/);
-  assert.match(switcher, /<!-- ai-release-notes:\/languages -->/);
+  // The switcher is the links themselves: nothing wraps them on the page.
+  assert.equal(switcher, "**EN** · [FR](RELEASE_INDEX_PROD_fr.md)");
 });
 
 test("renders HTML language buttons with the current language highlighted", () => {
@@ -115,59 +138,180 @@ test("collapses duplicate generated language switchers", () => {
 
   const updated = applyOutputIndexLanguageSwitcher(duplicated, switcher);
 
-  assert.equal(updated.match(/<!-- ai-release-notes:languages -->/g)?.length, 1);
   assert.equal(updated.match(/<nav class="language-switcher"/g)?.length, 1);
 });
 
-test("keeps language markers when only one localized index exists", () => {
+test("shows no switcher when only one localized index exists", () => {
   const switcher = renderOutputIndexLanguageSwitcher("markdown", [
     { language: "en", href: "index_en.md", active: true },
   ]);
 
-  assert.equal(
-    switcher,
-    "<!-- ai-release-notes:languages -->\n<!-- ai-release-notes:/languages -->"
-  );
+  assert.equal(switcher, "");
+  // The slot a template offers is spent either way, so no token is left behind.
+  assert.equal(applyOutputIndexLanguageSwitcher("Before\n{{languages}}\nAfter", switcher), "Before\n\nAfter");
 });
 
-test("updating a release entry preserves a switcher placed after the releases", () => {
-  const releaseId = "PROD_v1.0.0_v1.1.0";
-  const oldEntry = `<!-- ai-release-notes:release ${releaseId} -->\n## Old release`;
-  const newEntry = `<!-- ai-release-notes:release ${releaseId} -->\n## Updated release`;
-  const switcher = renderOutputIndexLanguageSwitcher("markdown", [
-    { language: "en", href: "index_en.md", active: true },
-    { language: "fr", href: "index_fr.md", active: false },
-  ]);
-  const existing = `# Index
+test("a lone link is not mistaken for a language switcher", () => {
+  const content = "See the [docs](https://example.com/docs) for more.";
 
-<!-- ai-release-notes:releases -->
-${oldEntry}
-<!-- ai-release-notes:/releases -->
-
-${switcher}
-
----
-Footer
-`;
-
-  const updated = insertOrUpdateOutputIndexReleaseEntry(existing, newEntry, releaseId);
-
-  assert.doesNotMatch(updated, /Old release/);
-  assert.match(updated, /Updated release/);
-  assert.match(updated, /<!-- ai-release-notes:languages -->/);
-  assert.match(updated, /Footer/);
+  assert.equal(hasOutputIndexLanguageSwitcher(content), false);
+  assert.equal(applyOutputIndexLanguageSwitcher(content, "**EN** · [FR](i.md)"), content);
 });
 
-test("legacy indexes stop release replacement before a following language switcher", () => {
-  const releaseId = "PROD_v1.0.0_v1.1.0";
-  const marker = `<!-- ai-release-notes:release ${releaseId} -->`;
-  const existing = `${marker}\n## Old\n<!-- ai-release-notes:languages -->\nButtons\n<!-- ai-release-notes:/languages -->`;
-  const updated = insertOrUpdateOutputIndexReleaseEntry(
-    existing,
-    `${marker}\n## New`,
-    releaseId
-  );
+test("the entry template is markup with slots and nothing else", async () => {
+  for (const format of ["markdown", "html"] as const) {
+    const entryTemplate = await bundledEntryTemplate(format);
 
-  assert.match(updated, /## New/);
-  assert.match(updated, /Buttons/);
+    assert.match(entryTemplate, /\{\{toVersion\}\}/);
+    assert.match(entryTemplate, /\{\{fromVersion\}\}/);
+    assert.match(entryTemplate, /\{\{href\}\}/);
+    // No heading, no marker, no syntax of the tool's own.
+    assert.doesNotMatch(entryTemplate, /<!--/);
+    assert.doesNotMatch(entryTemplate, /ai-release-notes/);
+  }
+});
+
+const v1 = {
+  environment: "QUA",
+  fromVersion: "v1.0.0",
+  toVersion: "v1.1.0",
+  date: "2026-07-21",
+  href: "release-notes_v1.0.0_v1.1.0.html",
+};
+const first = {
+  environment: "QUA",
+  fromVersion: "start",
+  toVersion: "v1.0.0",
+  date: "2026-06-02",
+  href: "release-notes_start_v1.0.0.html",
+};
+
+function renderAll(records: typeof v1[], entryTemplate: string, format: "markdown" | "html") {
+  return renderOutputIndexReleases({
+    records,
+    entryTemplate,
+    format,
+    localizeDate: (date) => date,
+  });
+}
+
+test("renders an index entry from the bundled HTML entry template", async () => {
+  const entryTemplate = await bundledEntryTemplate("html");
+  const entry = renderAll([v1], entryTemplate, "html");
+
+  assert.match(entry, /<h2>Release v1\.1\.0<\/h2>/);
+  assert.match(entry, /QUA · 2026-07-21 · Changes since v1\.0\.0/);
+  assert.match(entry, /<a href="release-notes_v1\.0\.0_v1\.1\.0\.html">Read release notes/);
+});
+
+test("a custom entry template decides everything an entry shows", async () => {
+  const entry = renderAll([v1], "<li>{{toVersion}} — {{date}}</li>", "html");
+
+  assert.match(entry, /<li>v1\.1\.0 — 2026-07-21<\/li>/);
+  assert.doesNotMatch(entry, /Changes since/);
+});
+
+test("escapes index entry values in HTML but not rendered slots", async () => {
+  const entryTemplate = await bundledEntryTemplate("html");
+  const entry = renderAll([{ ...v1, environment: '<script>"x"' }], entryTemplate, "html");
+  const [, page] = entry.split("-->");
+
+  assert.match(page, /&lt;script&gt;&quot;x&quot;/);
+  assert.doesNotMatch(page, /<script>/);
+  // The comparison and the links are template output, already escaped once.
+  assert.match(page, /<a href="release-notes_v1\.0\.0_v1\.1\.0\.html">/);
+});
+
+test("a record cannot close its own comment marker", async () => {
+  const entryTemplate = await bundledEntryTemplate("html");
+  const environment = '--><script>alert(1)</script>';
+  const entry = renderAll([{ ...v1, environment }], entryTemplate, "html");
+
+  // One terminator, the marker's own: the raw value stays sealed in the
+  // comment, and the page below it only ever sees the escaped form.
+  assert.equal(entry.match(/-->/g)?.length, 1);
+  assert.doesNotMatch(entry.split("-->")[1], /<script>/);
+  assert.equal(readOutputIndexReleaseRecords(entry)[0].environment, environment);
+});
+
+test("an entry carries the record its next rendering is built from", async () => {
+  const entryTemplate = await bundledEntryTemplate("html");
+  const rendered = renderAll([v1, first], entryTemplate, "html");
+
+  assert.deepEqual(readOutputIndexReleaseRecords(rendered), [v1, first]);
+});
+
+test("re-rendering an index relabels every release it lists", async () => {
+  const entryTemplate = await bundledEntryTemplate("html");
+  const index = replaceOutputIndexReleases(
+    "<main>\n<!-- ai-release-notes:releases -->\n<!-- ai-release-notes:/releases -->\n</main>",
+    renderAll([v1, first], entryTemplate, "html")
+  );
+  const records = readOutputIndexReleaseRecords(readOutputIndexReleasesRegion(index));
+
+  const translated = entryTemplate
+    .replace("Changes since", "Changements depuis")
+    .replace("Read release notes", "Voir les notes de version");
+  const relabelled = replaceOutputIndexReleases(index, renderAll(records, translated, "html"));
+
+  assert.equal(relabelled.match(/Changements depuis/g)?.length, 2);
+  assert.equal(relabelled.match(/Voir les notes de version/g)?.length, 2);
+  assert.doesNotMatch(relabelled, /Changes since/);
+  assert.equal(relabelled.match(/<section class="release-entry">/g)?.length, 2);
+});
+
+test("a rerun of the same release replaces its entry instead of adding one", () => {
+  const updated = upsertOutputIndexReleaseRecord([v1, first], { ...v1, date: "2026-07-22" });
+
+  assert.equal(updated.length, 2);
+  assert.equal(updated[0].date, "2026-07-22");
+  assert.equal(updated[1], first);
+});
+
+test("a new release opens the list", () => {
+  const updated = upsertOutputIndexReleaseRecord([first], v1);
+
+  assert.deepEqual(updated, [v1, first]);
+});
+
+test("entries written without a record are kept word for word", () => {
+  const region = `<!-- ai-release-notes:release QUA_v0.9.0_v1.0.0 -->
+<section class="release-entry"><h2>Version 1.0.0</h2></section>
+<!-- ai-release-notes:release ${JSON.stringify(v1)} -->
+<section class="release-entry"><h2>Release v1.1.0</h2></section>`;
+
+  const legacy = readLegacyOutputIndexEntries(region, [outputIndexReleaseId(v1)]);
+
+  assert.equal(legacy.length, 1);
+  assert.match(legacy[0], /<h2>Version 1\.0\.0<\/h2>/);
+  assert.doesNotMatch(legacy[0], /v1\.1\.0/);
+});
+
+test("a legacy entry gives way once its release is rendered from a record", () => {
+  const region = `<!-- ai-release-notes:release QUA_v1.0.0_v1.1.0 -->\n<section>old</section>`;
+
+  assert.deepEqual(readLegacyOutputIndexEntries(region, [outputIndexReleaseId(v1)]), []);
+});
+
+test("a summary template does not declare the entry shape itself", async () => {
+  for (const format of ["markdown", "html"] as const) {
+    const extension = format === "html" ? "html" : "md";
+    const summary = await readFile(
+      resolve(import.meta.dirname, `../templates/default-release-summary.${extension}`),
+      "utf-8"
+    );
+
+    // The entry shape lives in its own file, and an index stores nothing of it.
+    assert.doesNotMatch(summary, /ai-release-notes:item/);
+    assert.match(summary, /\{\{releases\}\}/);
+  }
+});
+
+test("a generated page is the bundled release-note template", () => {
+  const html = markdownToHtml("# Release\n\nContent");
+
+  assert.match(html, /<h1>Release<\/h1>/);
+  // The look comes from the template, never from markup spelled out in code.
+  assert.match(html, /\.release-entry \{/);
+  assert.doesNotMatch(html, /\{\{\w+\}\}/);
 });

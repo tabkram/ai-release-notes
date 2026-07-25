@@ -1,0 +1,69 @@
+name: Unpublish npm versions by prefix
+description: Find every published version matching a prefix and unpublish them.
+
+inputs:
+  version_prefix:
+    description: Version prefix to match, e.g. 0.2.0-canary.12.
+    required: true
+  confirm:
+    description: Must be exactly "I confirm to unpublish" to proceed.
+    required: true
+  force:
+    description: Pass --force to npm unpublish.
+    required: false
+    default: 'false'
+  npm_token:
+    description: npm token with publish rights. Trusted publishing (OIDC) cannot unpublish.
+    required: true
+
+outputs:
+  unpublished_versions:
+    description: Versions that were actually unpublished (comma-separated).
+    value: ${{ steps.unpublish.outputs.unpublished_versions }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: 22
+        registry-url: https://registry.npmjs.org
+
+    - name: Find published versions with prefix
+      id: find
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.version_prefix }}
+      run: |
+        set -euo pipefail
+
+        PACKAGE="$(node -p "require('./package.json').name")"
+        echo "Looking for $PACKAGE versions matching $PREFIX ..."
+
+        # npm view returns a bare string when the package has exactly one version,
+        # and fails outright when nothing is published yet.
+        npm view "$PACKAGE" versions --json > versions.json 2>/dev/null || echo '[]' > versions.json
+
+        MATCHES="$(jq -r --arg p "$PREFIX" \
+          '[ (if type == "array" then .[] else . end)
+             | select(. == $p or startswith($p + ".")) ] | join(",")' versions.json)"
+        rm -f versions.json
+
+        if [ -z "$MATCHES" ]; then
+          echo "No published versions match $PREFIX. Nothing to clean up."
+        else
+          echo "Matched: $MATCHES"
+        fi
+
+        printf 'versions=%s\n' "$MATCHES" >> "$GITHUB_OUTPUT"
+
+    - name: Unpublish matched versions
+      id: unpublish
+      if: steps.find.outputs.versions != ''
+      uses: ./.github/actions/unpublish
+      with:
+        versions: ${{ steps.find.outputs.versions }}
+        confirm: ${{ inputs.confirm }}
+        force: ${{ inputs.force }}
+        npm_token: ${{ inputs.npm_token }}

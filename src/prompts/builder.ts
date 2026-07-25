@@ -5,6 +5,7 @@
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve } from "path";
+import { isFirstRelease } from "../git.js";
 import type {
   ParsedCommit,
   PromptConfig,
@@ -162,8 +163,14 @@ export function buildUserPrompt(params: {
   }
 
   const project = params.projectName ? `Project: ${params.projectName}\n` : "";
+  // The sentinel is an internal value for "the whole history". Handing it over
+  // as-is is how a release note ends up announcing "Changes since start", so
+  // the metadata states the situation instead of naming the sentinel.
+  const previousVersion = isFirstRelease(params.fromVersion)
+    ? "none — this is the first release, so state that it is the first release wherever a comparison with a previous version would go"
+    : params.fromVersion;
 
-  return `${project}Previous version: ${params.fromVersion}
+  return `${project}Previous version: ${previousVersion}
 Current version: ${params.toVersion}
 Environment: ${params.environment}
 Release date: ${params.date}

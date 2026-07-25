@@ -1,32 +1,40 @@
 name: Unpublish from npm
+
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Pre-release version to unpublish
+        description: Prerelease version(s) to unpublish (comma-separated)
         required: true
         type: string
       confirm:
         description: Type "I confirm to unpublish" to continue
         required: true
         type: string
+      force:
+        description: Pass --force to npm unpublish
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 jobs:
   unpublish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Unpublish package versions
+        uses: ./.github/actions/unpublish
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - name: Validate destructive action
-        env:
-          VERSION: ${{ inputs.version }}
-          CONFIRM: ${{ inputs.confirm }}
-        run: |
-          test "$CONFIRM" = "I confirm to unpublish"
-          [[ "$VERSION" =~ -(canary|dev|beta|alpha|rc)(\.|$) ]] || { echo "Only prerelease versions can be unpublished."; exit 1; }
-      - name: Unpublish package version
-        env:
-          VERSION: ${{ inputs.version }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm unpublish "ai-release-notes@$VERSION"
+          versions: ${{ inputs.version }}
+          confirm: ${{ inputs.confirm }}
+          force: ${{ inputs.force }}
+          npm_token: ${{ secrets.NPM_TOKEN }}

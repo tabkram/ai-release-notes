@@ -1,0 +1,91 @@
+name: Unpublish npm versions
+description: Unpublish one or more prerelease versions of this package from npm.
+
+inputs:
+  versions:
+    description: Versions to unpublish (comma-separated).
+    required: true
+  confirm:
+    description: Must be exactly "I confirm to unpublish" to proceed.
+    required: true
+  force:
+    description: Pass --force to npm unpublish.
+    required: false
+    default: 'false'
+  npm_token:
+    description: npm token with publish rights. Trusted publishing (OIDC) cannot unpublish.
+    required: true
+
+outputs:
+  unpublished_versions:
+    description: Versions that were actually unpublished (comma-separated).
+    value: ${{ steps.unpublish.outputs.unpublished_versions }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: 22
+        registry-url: https://registry.npmjs.org
+
+    - name: Validate destructive action
+      shell: bash
+      env:
+        VERSIONS: ${{ inputs.versions }}
+        CONFIRM: ${{ inputs.confirm }}
+      run: |
+        set -euo pipefail
+
+        if [ "$CONFIRM" != "I confirm to unpublish" ]; then
+          echo "::error::Refusing to unpublish. Set confirm to exactly 'I confirm to unpublish'."
+          exit 1
+        fi
+
+        if [ -z "$VERSIONS" ]; then
+          echo "::error::No versions provided."
+          exit 1
+        fi
+
+        IFS=',' read -ra LIST <<< "$VERSIONS"
+        for VERSION in "${LIST[@]}"; do
+          [ -n "$VERSION" ] || continue
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(canary|dev|alpha|beta|rc)(\.[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to unpublish '$VERSION'. Only canary/dev/alpha/beta/rc prereleases may be unpublished."
+            exit 1
+          fi
+          echo "Queued for unpublish: $VERSION"
+        done
+
+    - name: Unpublish versions
+      id: unpublish
+      shell: bash
+      env:
+        VERSIONS: ${{ inputs.versions }}
+        FORCE: ${{ inputs.force }}
+        NODE_AUTH_TOKEN: ${{ inputs.npm_token }}
+      run: |
+        set -uo pipefail
+
+        PACKAGE="$(node -p "require('./package.json').name")"
+
+        FORCE_ARG=()
+        if [ "$FORCE" = "true" ]; then
+          FORCE_ARG=(--force)
+          echo "Force mode enabled."
+        fi
+
+        IFS=',' read -ra LIST <<< "$VERSIONS"
+        UNPUBLISHED=()
+        for VERSION in "${LIST[@]}"; do
+          [ -n "$VERSION" ] || continue
+          echo "Unpublishing $PACKAGE@$VERSION ..."
+          if npm unpublish "${FORCE_ARG[@]}" "$PACKAGE@$VERSION"; then
+            UNPUBLISHED+=("$VERSION")
+          else
+            echo "::warning::Could not unpublish $PACKAGE@$VERSION. It may already be gone."
+          fi
+        done
+
+        printf 'unpublished_versions=%s\n' "$(IFS=,; echo "${UNPUBLISHED[*]}")" >> "$GITHUB_OUTPUT"

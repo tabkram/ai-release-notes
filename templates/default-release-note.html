@@ -4,27 +4,35 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>{{title}}</title>
+  <title>Release notes</title>
   <style>
       :root {
           color-scheme: light dark;
           --page: #fff;
+          --surface: #f6f7f8;
           --text: #202124;
           --muted: #5f6368;
           --line: #d9dde3;
           --link: #1558d6;
-          --code: #f6f7f8;
       }
 
       @media (prefers-color-scheme: dark) {
           :root {
               --page: #181a1b;
+              --surface: #242729;
               --text: #e8eaed;
               --muted: #b8bec5;
               --line: #3c4043;
               --link: #8ab4f8;
-              --code: #242729;
           }
+      }
+
+      * {
+          box-sizing: border-box;
+      }
+
+      html {
+          background: var(--page);
       }
 
       body {
@@ -34,6 +42,10 @@
           background: var(--page);
           color: var(--text);
           font: 1rem/1.65 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+          min-width: 0;
       }
 
       h1, h2, h3, h4, h5, h6 {
@@ -65,9 +77,44 @@
           font-size: 0.95rem;
       }
 
+      p {
+          margin: 0.85rem 0;
+      }
+
       .meta {
           margin: 0.5rem 0 0;
           color: var(--muted);
+      }
+
+      section {
+          margin: 2rem 0;
+      }
+
+      /* One listed release, when this shell wraps a release summary. */
+      .release-entry {
+          margin: 1.25rem 0;
+          padding: 1.35rem 1.5rem;
+          border: 1px solid var(--line);
+          border-radius: 0.75rem;
+          background: var(--surface);
+      }
+
+      .release-entry h2 {
+          margin: 0;
+          font-size: 1.2rem;
+      }
+
+      .release-entry p {
+          margin: 0.45rem 0 1rem;
+          color: var(--muted);
+          font-size: 0.925rem;
+      }
+
+      .release-entry p:last-child {
+          margin: 0;
+          color: var(--text);
+          font-size: 1rem;
+          font-weight: 600;
       }
 
       ul, ol {
@@ -80,7 +127,12 @@
 
       a {
           color: var(--link);
+          text-decoration-thickness: 1px;
           text-underline-offset: 0.16em;
+      }
+
+      a:hover {
+          text-decoration-thickness: 2px;
       }
 
       blockquote {
@@ -93,22 +145,31 @@
       code {
           padding: 0.12em 0.35em;
           border-radius: 0.3rem;
-          background: var(--code);
+          background: var(--surface);
           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
           font-size: 0.9em;
       }
 
       pre {
+          margin: 1.25rem 0;
           padding: 1rem;
           overflow-x: auto;
           border: 1px solid var(--line);
           border-radius: 0.6rem;
-          background: var(--code);
+          background: var(--surface);
       }
 
       pre code {
           padding: 0;
           background: none;
+          font-size: 0.875rem;
+      }
+
+      hr {
+          height: 1px;
+          margin: 2.5rem 0;
+          border: 0;
+          background: var(--line);
       }
 
       footer {
