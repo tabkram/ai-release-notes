@@ -1,3 +1,8 @@
+## [0.2.0](https://github.com/tabkram/ai-release-notes/compare/v0.1.0...v0.2.0) (2026-07-25)
+
+### Bug Fixes
+
+* strip code fences from release notes and improve duplicate detection ([7ebee00](https://github.com/tabkram/ai-release-notes/commit/7ebee00f90be06d813ffbe3d36ea60ce5b821e6d))
 ## [0.1.0](https://github.com/tabkram/ai-release-notes/compare/v0.0.2...v0.1.0) (2026-07-24)
 
 ### ⚠ BREAKING CHANGES
