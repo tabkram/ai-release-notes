@@ -120,6 +120,33 @@ test("supplies the release metadata the instructions can compose a title with", 
   assert.match(prompt, /- feat: \[dashboard\] add release filters/);
 });
 
+test("describes a first release instead of naming the start sentinel", () => {
+  const prompt = buildUserPrompt({
+    projectName: "ACME Platform",
+    fromVersion: "start",
+    toVersion: "v1.1.0",
+    environment: "prod",
+    date: "June 03, 2026",
+    commits,
+  });
+
+  assert.doesNotMatch(prompt, /Previous version: start/);
+  assert.match(prompt, /Previous version: none — this is the first release/);
+});
+
+test("leaves the start sentinel untouched in a custom user prompt template", () => {
+  const prompt = buildUserPrompt({
+    fromVersion: "start",
+    toVersion: "v1.1.0",
+    environment: "prod",
+    date: "June 03, 2026",
+    commits,
+    template: "{{fromVersion}} → {{toVersion}}",
+  });
+
+  assert.match(prompt, /^start → v1\.1\.0$/m);
+});
+
 test("fills a custom user prompt template", () => {
   const prompt = buildUserPrompt({
     projectName: "ACME Platform",

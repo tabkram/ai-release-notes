@@ -20,6 +20,8 @@ One or two sentences on what this release brings.
   italic metadata line, and a horizontal rule. Take the project name, versions,
   environment, and release date from the supplied metadata, and leave out the
   project name when none is supplied.
+- When the metadata reports no previous version, write `First release` in the
+  metadata line, where the comparison with a previous version would go.
 - Never repeat the project name, the versions, the environment, or the release
   date anywhere else in the document.
 - Follow the title block with a one or two sentence summary of the release,

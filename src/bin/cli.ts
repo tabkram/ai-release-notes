@@ -10,14 +10,24 @@ import { callLLM } from "../llm.js";
 import {
   applyOutputIndexLanguageSwitcher,
   hasOutputIndexLanguageSwitcher,
-  insertOrUpdateOutputIndexReleaseEntry,
   markdownToHtml,
+  outputIndexReleaseId,
+  readLegacyOutputIndexEntries,
+  readOutputIndexReleaseRecords,
+  readOutputIndexReleasesRegion,
   renderOutputIndexLanguageSwitcher,
+  renderOutputIndexReleases,
+  replaceOutputIndexReleases,
+  upsertOutputIndexReleaseRecord,
+  RELEASES_MARKER,
+  RELEASES_END_MARKER,
+  type OutputIndexEntryTemplate,
   type OutputIndexLanguageLink,
+  type OutputIndexReleaseRecord,
 } from "../release.js";
 import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
 import { discoverOutputIndexLanguages } from "../output-index.js";
-import { getLatestTag } from "../git.js";
+import { FIRST_RELEASE, getLatestTag, isFirstRelease } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve, join, dirname, relative } from "path";
@@ -36,6 +46,12 @@ type OutputTarget = {
   html?: string;
   format?: string;
   language?: string;
+  /**
+   * The path names this release and no other, so the file holds one release:
+   * regenerating it replaces its content. A path shared by every release
+   * accumulates them instead.
+   */
+  ownedByRelease?: boolean;
 };
 
 type OutputIndexTarget = {
@@ -44,6 +60,7 @@ type OutputIndexTarget = {
   language?: string;
   format: "markdown" | "html";
   templatePath?: string;
+  entryTemplatePath?: string;
   templateLanguage: string;
 };
 
@@ -165,8 +182,8 @@ program
   .description("Generate release notes from git tags")
   .option(
     "--from <version>",
-    'Previous version tag, or "start" for the full history',
-    "start"
+    `Previous version tag, or "${FIRST_RELEASE}" for the full history`,
+    FIRST_RELEASE
   )
   .option("--to <version>", "Current version tag (e.g. v1.1.0)")
   .requiredOption("--env <environment>", "Environment: PROD, STAGING, DEV...")
@@ -236,12 +253,12 @@ program
 
       // Determine output path
       let outputTargets: OutputTarget[] = !opts.stdout && opts.output
-        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format }]
+        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format, ownedByRelease: true }]
         : [];
       if (!opts.stdout && outputTargets.length === 0 && opts.outputDir) {
         const ext = opts.format === "html" ? "html" : "md";
         const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${ext}`;
-        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format }];
+        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format, ownedByRelease: true }];
       }
 
       if (!opts.stdout && outputTargets.length === 0) {
@@ -250,21 +267,25 @@ program
           outputTargets = outputConfigs.flatMap((output) => {
             if (!output.saveTo) return [];
             const saveTo = Array.isArray(output.saveTo) ? output.saveTo : [output.saveTo];
-            return saveTo.flatMap((path) => path.includes("{lang}")
-              ? generatedResult.localized.map((release) => ({
-                  path: getOutputPath(path, opts.env, release.language, opts.from, opts.to),
-                  markdown: release.markdown,
-                  html: release.html,
-                  format: output.format,
-                  language: release.language,
-                }))
-              : [{
-                  path: getOutputPath(path, opts.env, undefined, opts.from, opts.to),
-                  markdown: generatedResult.markdown,
-                  html: generatedResult.html,
-                  format: output.format,
-                }]
-            );
+            return saveTo.flatMap((path) => {
+              const ownedByRelease = isReleaseSpecificPath(path);
+              return path.includes("{lang}")
+                ? generatedResult.localized.map((release) => ({
+                    path: getOutputPath(path, opts.env, release.language, opts.from, opts.to),
+                    markdown: release.markdown,
+                    html: release.html,
+                    format: output.format,
+                    language: release.language,
+                    ownedByRelease,
+                  }))
+                : [{
+                    path: getOutputPath(path, opts.env, undefined, opts.from, opts.to),
+                    markdown: generatedResult.markdown,
+                    html: generatedResult.html,
+                    format: output.format,
+                    ownedByRelease,
+                  }];
+            });
           });
         }
       }
@@ -283,6 +304,7 @@ program
               language: release.language,
               format: outputIndex.format,
               templatePath: outputIndex.template,
+              entryTemplatePath: outputIndex.entryTemplate,
               templateLanguage: primaryLanguage,
             }))
           : [{
@@ -290,6 +312,7 @@ program
               groupId,
               format: outputIndex.format,
               templatePath: outputIndex.template,
+              entryTemplatePath: outputIndex.entryTemplate,
               templateLanguage: primaryLanguage,
             }]
       );
@@ -345,16 +368,22 @@ program
         const content = target.format === "html" && target.html
           ? target.html
           : target.markdown;
-        const saved = await saveReleaseNotes(resolve(outputPath), content, target.markdown);
+        const saved = await saveReleaseNotes(
+          resolve(outputPath),
+          content,
+          target.markdown,
+          target.ownedByRelease === true
+        );
         if (saved === "skipped") {
           console.log(chalk.yellow("ℹ️  Release " + fromVersion + " → " + toVersion + " is already in " + outputPath));
+        } else if (saved === "replaced") {
+          console.log(chalk.green("💾 Replaced " + outputPath));
         } else {
           console.log(chalk.green("💾 Saved to " + outputPath));
         }
       }
 
       if (outputIndexTargets.length > 0 && outputTargets.length > 0) {
-        const translatedCopyCache = new Map<string, Promise<OutputIndexCopy>>();
         for (const index of outputIndexTargets) {
           await mkdir(dirname(index.path), { recursive: true });
           const releasePaths = getReleasePathsForIndex(index, outputTargets);
@@ -363,6 +392,7 @@ program
             outputPath: index.path,
             format: index.format,
             templatePath: index.templatePath,
+            entryTemplatePath: index.entryTemplatePath,
             translateTemplate: !opts.dryRun && shouldTranslateTemplate(index.templateLanguage, index.language)
               ? async (template) => {
                   const translated = await translateOutputIndexTemplate(
@@ -374,25 +404,6 @@ program
                   addTemplateUsage(generatedResult.metadata.usage, translated.usage);
                   return translated.text;
               }
-              : undefined,
-            translateCopy: !opts.dryRun && shouldTranslateOutputIndexCopy(index.language)
-              ? () => {
-                  const language = index.language!;
-                  const key = languageCode(language);
-                  let translated = translatedCopyCache.get(key);
-                  if (!translated) {
-                    translated = translateOutputIndexCopy(
-                      language,
-                      generatedResult.metadata.provider as ProviderName,
-                      loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
-                    ).then(({ copy, usage }) => {
-                      addTemplateUsage(generatedResult.metadata.usage, usage);
-                      return copy;
-                    });
-                    translatedCopyCache.set(key, translated);
-                  }
-                  return translated;
-                }
               : undefined,
             projectName: loadedConfig.projectName,
             environment: opts.env,
@@ -499,8 +510,19 @@ function getOutputPath(
   return saveTo
     .replaceAll("{env}", normalizedEnvironment)
     .replaceAll("{lang}", normalizedLanguage || "{lang}")
-    .replaceAll("{from}", fromVersion || "start")
+    .replaceAll("{from}", fromVersion || FIRST_RELEASE)
     .replaceAll("{to}", toVersion || "end");
+}
+
+/**
+ * Whether a `saveTo` pattern resolves to a different file for every release.
+ *
+ * With a version placeholder each release gets its own file and owns it. Without
+ * one, every release resolves to the same path, which is how a cumulative
+ * changelog is configured, and there the releases stack up instead.
+ */
+function isReleaseSpecificPath(saveTo: string): boolean {
+  return saveTo.includes("{from}") || saveTo.includes("{to}");
 }
 
 function getReleasePathsForIndex(index: OutputIndexTarget, outputTargets: OutputTarget[]): string[] {
@@ -535,23 +557,12 @@ function getOutputIndexLanguageLinks(
     }));
 }
 
-const RELEASES_MARKER = "<!-- ai-release-notes:releases -->";
-const RELEASES_END_MARKER = "<!-- ai-release-notes:/releases -->";
-
-type OutputIndexCopy = {
-  release: string;
-  releaseNotes: string;
-  intro: (environment: string) => string;
-  changesSince: string;
-  readReleaseNotes: string;
-};
-
 async function createOrUpdateOutputIndex(params: {
   outputPath: string;
   format: "markdown" | "html";
   templatePath?: string;
+  entryTemplatePath?: string;
   translateTemplate?: (template: string) => Promise<string>;
-  translateCopy?: () => Promise<OutputIndexCopy>;
   projectName?: string;
   environment: string;
   language?: string;
@@ -561,33 +572,54 @@ async function createOrUpdateOutputIndex(params: {
   releasePaths: string[];
   languageLinks: OutputIndexLanguageLink[];
 }): Promise<string> {
-  const copy = params.translateCopy
-    ? await params.translateCopy()
-    : getOutputIndexCopy(params.language);
-  const localizedDate = localizeIndexDate(params.date, params.language);
-  const releaseId = [params.environment, params.fromVersion, params.toVersion]
-    .map((value) => encodeURIComponent(value))
-    .join("_");
-  const releaseEntry = buildOutputIndexEntry(params, releaseId, copy, localizedDate);
-  const indexTitle = `${params.projectName ? params.projectName + " · " : ""}${copy.releaseNotes}`;
-  const intro = copy.intro(params.environment);
   const languageSwitcher = renderOutputIndexLanguageSwitcher(params.format, params.languageLinks);
+  const record: OutputIndexReleaseRecord = {
+    environment: params.environment,
+    fromVersion: params.fromVersion,
+    toVersion: params.toVersion,
+    date: params.date,
+    href: toRelativeLink(params.outputPath, params.releasePaths[0]),
+  };
+  const renderReleases = (
+    records: OutputIndexReleaseRecord[],
+    entryTemplate: OutputIndexEntryTemplate
+  ) => renderOutputIndexReleases({
+    records,
+    entryTemplate,
+    format: params.format,
+    localizeDate: (date) => localizeIndexDate(date, params.language),
+  });
 
   if (existsSync(params.outputPath)) {
     const existing = await readFile(params.outputPath, "utf-8");
-    const normalizedExisting = params.format === "html"
-      ? unwrapHtmlDocumentCodeFence(existing)
-      : existing;
-    const boundedExisting = ensureOutputIndexReleaseBoundary(normalizedExisting, params.format);
-    const updated = insertOrUpdateOutputIndexReleaseEntry(
-      localizeExistingIndexEntries(
-        localizeExistingIndexChrome(boundedExisting, params.format, indexTitle, intro),
-        params.format,
-        copy
-      ),
-      releaseEntry,
-      releaseId
+    // An index written before the releases were bounded ends its list at the
+    // first thing that follows it, so give it that boundary before reading the
+    // list back out.
+    const normalizedExisting = ensureOutputIndexReleaseBoundary(
+      params.format === "html" ? unwrapHtmlDocumentCodeFence(existing) : existing,
+      params.format
     );
+    // The entry template is read from its file on every run, so an index never
+    // has to carry a copy of it: editing the file is what changes the shape.
+    const { entryTemplate } = await loadOutputIndexEntryTemplate(params);
+
+    // Every release the index knows is rendered again from its record, so a
+    // template or a language that changed reaches the whole history, not just
+    // the release being added.
+    const region = readOutputIndexReleasesRegion(normalizedExisting);
+    const records = upsertOutputIndexReleaseRecord(
+      readOutputIndexReleaseRecords(region),
+      record
+    );
+    const legacyEntries = readLegacyOutputIndexEntries(
+      region,
+      records.map(outputIndexReleaseId)
+    );
+    const updated = replaceOutputIndexReleases(
+      normalizedExisting,
+      [renderReleases(records, entryTemplate), ...legacyEntries].filter(Boolean).join("\n")
+    );
+
     const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(updated);
     const withLanguageSwitcher = applyOutputIndexLanguageSwitcher(updated, languageSwitcher);
     if (!params.templatePath && params.languageLinks.length > 1 && !hasLanguageSwitcher) {
@@ -596,16 +628,13 @@ async function createOrUpdateOutputIndex(params: {
     return withLanguageSwitcher;
   }
 
-  const template = await loadOutputIndexTemplate(params.templatePath, params.format);
-  const localizedTemplate = params.translateTemplate
-    ? await params.translateTemplate(template)
-    : template;
-  const rendered = renderOutputIndexTemplate(localizedTemplate, {
+  const { template, entryTemplate } = await loadOutputIndexEntryTemplate(params);
+  const rendered = renderOutputIndexTemplate(template, {
     projectName: params.projectName || "Project",
     environment: params.environment,
     language: params.language || "",
-    date: localizedDate,
-    releases: releaseEntry,
+    date: localizeIndexDate(params.date, params.language),
+    releases: renderReleases([record], entryTemplate),
     languages: languageSwitcher,
     version: CLI_VERSION,
   }, params.format);
@@ -619,43 +648,62 @@ async function createOrUpdateOutputIndex(params: {
   // never gets that trust.
   const html = isHtmlTemplate
     ? rendered
-    : markdownToHtml(rendered, "Release index", "", { trustedHtml: true });
+    : markdownToHtml(rendered, { trustedHtml: true });
   return html;
 }
 
-function buildOutputIndexEntry(
-  params: {
-    outputPath: string;
-    format: "markdown" | "html";
-    environment: string;
-    fromVersion: string;
-    toVersion: string;
-    date: string;
-    releasePaths: string[];
-  },
-  releaseId: string,
-  copy: OutputIndexCopy,
-  localizedDate: string
-): string {
-  const releasePaths = [...new Set(params.releasePaths)];
-  const marker = `<!-- ai-release-notes:release ${releaseId} -->`;
-  const title = `${copy.release} ${params.toVersion}`;
-  const metadata = `${params.environment} · ${localizedDate} · ${copy.changesSince} ${params.fromVersion}`;
+/**
+ * Joins the summary and the entry template on their way to the translator.
+ *
+ * It exists for the length of one call: it is never written to a template nor
+ * to a generated index.
+ */
+const ENTRY_TEMPLATE_SEPARATOR = "__AI_RELEASE_NOTES_PART__";
 
-  if (params.format === "html") {
-    const links = releasePaths
-      .map((path) => {
-        const href = escapeHtml(toRelativeLink(params.outputPath, path));
-        return `<a href="${href}">${escapeHtml(copy.readReleaseNotes)} <span aria-hidden="true">→</span></a>`;
-      })
-      .join("\n");
-    return `${marker}\n<section class="release-entry">\n<h2>${escapeHtml(title)}</h2>\n<p class="release-meta"><em>${escapeHtml(metadata)}</em></p>\n<p class="release-link">${links}</p>\n</section>`;
+/**
+ * The summary template to render, and the entry shape to list releases with.
+ *
+ * The entry shape is not configurable, so it never comes from the summary
+ * template. Both are translated in one pass, then split apart again: only the
+ * summary is rendered, and the entry shape is stored in the index.
+ */
+async function loadOutputIndexEntryTemplate(params: {
+  templatePath?: string;
+  entryTemplatePath?: string;
+  format: "markdown" | "html";
+  translateTemplate?: (template: string) => Promise<string>;
+}): Promise<{ template: string; entryTemplate: OutputIndexEntryTemplate }> {
+  const summary = await loadOutputIndexTemplate(params.templatePath, params.format);
+  const entryFile = await loadEntryTemplate(params.entryTemplatePath, params.format);
+  const joined = `${summary}\n${ENTRY_TEMPLATE_SEPARATOR}\n${entryFile}`;
+  const localized = params.translateTemplate
+    ? await params.translateTemplate(joined)
+    : joined;
+
+  // A translation that lost the separator cannot be split back apart. The
+  // summary stays usable; the entry falls back to the file that was sent.
+  const separator = localized.lastIndexOf(ENTRY_TEMPLATE_SEPARATOR);
+  return {
+    template: (separator < 0 ? localized : localized.slice(0, separator)).trimEnd(),
+    entryTemplate: separator < 0
+      ? entryFile.trim()
+      : localized.slice(separator + ENTRY_TEMPLATE_SEPARATOR.length).trim(),
+  };
+}
+
+async function loadEntryTemplate(
+  entryTemplatePath: string | undefined,
+  format: "markdown" | "html"
+): Promise<string> {
+  if (!entryTemplatePath) {
+    return loadBundledTemplate("default-release-summary-entry", format);
   }
 
-  const links = releasePaths
-    .map((path) => `[${copy.readReleaseNotes} →](${toRelativeLink(params.outputPath, path)})`)
-    .join("\n");
-  return `${marker}\n## ${title}\n\n_${metadata}_\n\n${links}`;
+  const resolvedPath = resolve(entryTemplatePath);
+  if (!existsSync(resolvedPath)) {
+    throw new Error(`Output index entry template not found: ${resolvedPath}`);
+  }
+  return readFile(resolvedPath, "utf-8");
 }
 
 async function loadOutputIndexTemplate(
@@ -663,8 +711,7 @@ async function loadOutputIndexTemplate(
   format: "markdown" | "html"
 ): Promise<string> {
   if (!templatePath) {
-    const extension = format === "html" ? "html" : "md";
-    return readFile(resolve(__dirname, `../../templates/default-release-summary.${extension}`), "utf-8");
+    return loadBundledTemplate("default-release-summary", format);
   }
 
   const resolvedTemplatePath = resolve(templatePath);
@@ -672,6 +719,11 @@ async function loadOutputIndexTemplate(
     throw new Error(`Output index template not found: ${resolvedTemplatePath}`);
   }
   return readFile(resolvedTemplatePath, "utf-8");
+}
+
+function loadBundledTemplate(name: string, format: "markdown" | "html"): Promise<string> {
+  const extension = format === "html" ? "html" : "md";
+  return readFile(resolve(__dirname, `../../templates/${name}.${extension}`), "utf-8");
 }
 
 function renderOutputIndexTemplate(
@@ -700,99 +752,6 @@ function renderOutputIndexTemplate(
   return applyOutputIndexLanguageSwitcher(rendered, values.languages);
 }
 
-function localizeExistingIndexEntries(
-  content: string,
-  format: "markdown" | "html",
-  copy: OutputIndexCopy
-): string {
-  if (format === "markdown") {
-    return content
-      .replace(
-        /(<!-- ai-release-notes:release [^>]+ -->\n## )(?:Release|Versión|Version)\s+/g,
-        (_match, prefix: string) => `${prefix}${copy.release} `
-      )
-      .replace(
-        /(^_[^\n]*? · [^\n]*? · )(?:Changes since|Cambios desde|Changements depuis)\s+/gm,
-        (_match, prefix: string) => `${prefix}${copy.changesSince} `
-      )
-      .replace(
-        /\[(?:Read release notes|Ver notas de la versión|Voir les notes de version) →\]/g,
-        `[${copy.readReleaseNotes} →]`
-      );
-  }
-
-  return content
-    .replace(
-      /(<section class="release-entry">\n<h2>)(?:Release|Versión|Version)\s+/g,
-      (_match, prefix: string) => `${prefix}${escapeHtml(copy.release)} `
-    )
-    .replace(
-      /(<p class="release-meta">.*? · .*? · )(?:Changes since|Cambios desde|Changements depuis)\s+/g,
-      (_match, prefix: string) => `${prefix}${escapeHtml(copy.changesSince)} `
-    )
-    .replace(
-      /(<a href="[^"]+">)(?:Read release notes|Ver notas de la versión|Voir les notes de version)(?= <span aria-hidden="true">→<\/span><\/a>)/g,
-      (_match, prefix: string) => `${prefix}${escapeHtml(copy.readReleaseNotes)}`
-    )
-    .replace(
-      /<p class="release-meta">(?!<em>)([\s\S]*?)<\/p>/g,
-      (_match, metadata: string) => `<p class="release-meta"><em>${metadata}</em></p>`
-    );
-}
-
-function localizeExistingIndexChrome(
-  content: string,
-  format: "markdown" | "html",
-  indexTitle: string,
-  intro: string
-): string {
-  if (format === "markdown") {
-    return content
-      .replace(/^# .*?(?:release notes|release index)\s*$/im, `# ${indexTitle}`)
-      .replace(
-        /^A concise release history for .*?\. The newest release is listed first\.\s*$/im,
-        intro
-      );
-  }
-
-  return content
-    .replace(/<title>.*?(?:release notes|release index)<\/title>/i, `<title>${escapeHtml(indexTitle)}</title>`)
-    .replace(/<h1>.*?(?:release notes|release index)<\/h1>/i, `<h1>${escapeHtml(indexTitle)}</h1>`)
-    .replace(
-      /<p class="intro">A concise release history for .*?\. The newest release is listed first\.<\/p>/i,
-      `<p class="intro">${escapeHtml(intro)}</p>`
-    );
-}
-
-function getOutputIndexCopy(language?: string): OutputIndexCopy {
-  const code = language ? languageCode(language) : undefined;
-  if (code === "es") {
-    return {
-      release: "Versión",
-      releaseNotes: "Notas de la versión",
-      intro: (environment) => `Un historial conciso de versiones para ${environment}. Las más recientes aparecen primero.`,
-      changesSince: "Cambios desde",
-      readReleaseNotes: "Ver notas de la versión",
-    };
-  }
-  if (code === "fr") {
-    return {
-      release: "Version",
-      releaseNotes: "Notes de version",
-      intro: (environment) => `Un historique concis des versions pour ${environment}. Les plus récentes apparaissent en premier.`,
-      changesSince: "Changements depuis",
-      readReleaseNotes: "Voir les notes de version",
-    };
-  }
-  return {
-    release: "Release",
-    releaseNotes: "Release notes",
-    intro: (environment) => `A concise release history for ${environment}. The newest release is listed first.`,
-    changesSince: "Changes since",
-    readReleaseNotes: "Read release notes",
-  };
-}
-
 function localizeIndexDate(date: string, language?: string): string {
   if (!language) return date;
   const parsed = new Date(date);
@@ -807,62 +766,6 @@ function localizeIndexDate(date: string, language?: string): string {
 function shouldTranslateTemplate(templateLanguage: string, outputLanguage?: string): boolean {
   if (!outputLanguage) return false;
   return languageCode(templateLanguage) !== languageCode(outputLanguage);
-}
-
-function shouldTranslateOutputIndexCopy(language?: string): boolean {
-  return Boolean(language && languageCode(language) !== "en");
-}
-
-async function translateOutputIndexCopy(
-  language: string,
-  providerName: ProviderName,
-  providerConfig: ProviderConfig
-): Promise<{ copy: OutputIndexCopy; usage: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
-  const result = await callLLM(
-    providerName,
-    providerConfig,
-    "You translate the labels used in a release-summary index. Return only valid JSON with these string keys: " +
-      "release, releaseNotes, intro, changesSince, readReleaseNotes. " +
-      "The intro value must preserve {{environment}} exactly. Do not include Markdown, HTML, or explanations.",
-    `Target language: ${language}\n\nEnglish source:\n` +
-      JSON.stringify({
-        release: "Release",
-        releaseNotes: "Release notes",
-        intro: "A concise release history for {{environment}}. The newest release is listed first.",
-        changesSince: "Changes since",
-        readReleaseNotes: "Read release notes",
-      })
-  );
-  const rawJson = result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  let translated: unknown;
-  try {
-    translated = JSON.parse(rawJson);
-  } catch {
-    throw new Error("Could not parse translated output-index labels as JSON");
-  }
-  if (!isOutputIndexCopyTranslation(translated)) {
-    throw new Error("Translated output-index labels are incomplete");
-  }
-
-  return {
-    copy: {
-      release: translated.release,
-      releaseNotes: translated.releaseNotes,
-      intro: (environment) => translated.intro.replaceAll("{{environment}}", environment),
-      changesSince: translated.changesSince,
-      readReleaseNotes: translated.readReleaseNotes,
-    },
-    usage: result.usage,
-  };
-}
-
-function isOutputIndexCopyTranslation(value: unknown): value is Record<keyof Omit<OutputIndexCopy, "intro"> | "intro", string> {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  return ["release", "releaseNotes", "intro", "changesSince", "readReleaseNotes"]
-    .every((key) => typeof candidate[key] === "string" && candidate[key].trim().length > 0)
-    && typeof candidate.intro === "string"
-    && candidate.intro.includes("{{environment}}");
 }
 
 async function translateOutputIndexTemplate(
@@ -885,6 +788,9 @@ async function translateOutputIndexTemplate(
   if (!translated.includes(RELEASES_MARKER) || !translated.includes("{{releases}}")) {
     throw new Error("Translated output-index template did not preserve the required releases marker or {{releases}} token");
   }
+  if (template.includes(ENTRY_TEMPLATE_SEPARATOR) && !translated.includes(ENTRY_TEMPLATE_SEPARATOR)) {
+    throw new Error("Translated output-index template did not preserve its entry template");
+  }
   return { text: translated, usage: result.usage };
 }
 
@@ -900,6 +806,9 @@ function unwrapHtmlDocumentCodeFence(content: string): string {
 function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
   const values = [
     RELEASES_MARKER,
+    // The entry template travels with the summary. Its labels are meant to be
+    // translated; what separates and names its parts is not.
+    ENTRY_TEMPLATE_SEPARATOR,
     "{{projectName}}",
     "{{environment}}",
     "{{language}}",
@@ -908,6 +817,11 @@ function protectTemplateTokens(template: string): { template: string; tokens: Ar
     "{{date}}",
     "{{releases}}",
     "{{version}}",
+    "{{fromVersion}}",
+    "{{toVersion}}",
+    "{{fromToComparison}}",
+    "{{links}}",
+    "{{href}}",
   ];
   const tokens = values.map((value, index) => [value, `__AI_RELEASE_TEMPLATE_TOKEN_${index}__`] as [string, string]);
   return {
@@ -943,11 +857,11 @@ function ensureOutputIndexReleaseBoundary(
   }
 
   const releasesStart = content.indexOf(RELEASES_MARKER) + RELEASES_MARKER.length;
-  const candidates = [content.indexOf("<!-- ai-release-notes:languages -->", releasesStart)];
-  candidates.push(format === "html"
-    ? content.indexOf("</main>", releasesStart)
-    : content.indexOf("\n---\n", releasesStart));
-  const boundary = candidates.filter((index) => index >= 0).sort((a, b) => a - b)[0];
+  const boundary = [
+    format === "html"
+      ? content.indexOf("</main>", releasesStart)
+      : content.indexOf("\n---\n", releasesStart),
+  ].filter((index) => index >= 0)[0];
 
   if (boundary === undefined) {
     return `${content.trimEnd()}\n${RELEASES_END_MARKER}\n`;
@@ -979,7 +893,21 @@ function formatDuration(durationMs: number): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-async function saveReleaseNotes(outputPath: string, content: string, markdown: string): Promise<"saved" | "skipped"> {
+async function saveReleaseNotes(
+  outputPath: string,
+  content: string,
+  markdown: string,
+  ownedByRelease: boolean
+): Promise<"saved" | "replaced" | "skipped"> {
+  // A file that belongs to a single release always holds that release as it
+  // was last generated: regenerating rewrites it, so re-running the same
+  // command twice can never leave two copies behind.
+  if (ownedByRelease) {
+    const replaced = existsSync(outputPath);
+    await writeFile(outputPath, outputPath.endsWith(".html") ? content : content.trim() + "\n", "utf-8");
+    return replaced ? "replaced" : "saved";
+  }
+
   const existing = existsSync(outputPath) ? await readFile(outputPath, "utf-8") : "";
   // Probe the form that was actually written: a Markdown heading line never
   // appears in rendered HTML, so comparing one against the other reports every

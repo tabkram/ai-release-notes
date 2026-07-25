@@ -12,7 +12,7 @@ import {
   resolveInstructions,
   resolvePromptSource,
 } from "./prompts/builder.js";
-import { renderReleaseNoteHtml } from "./release.js";
+import { DEFAULT_RELEASE_NOTE_TEMPLATE_PATH, renderReleaseNoteHtml } from "./release.js";
 import { loadContextFiles } from "./context.js";
 import type { GenerateOptions, GenerateResult, GenerationUsage } from "./types.js";
 import { readFile } from "fs/promises";
@@ -268,7 +268,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 export async function loadReleaseNoteTemplate(templatePath?: string): Promise<string> {
   const resolvedTemplatePath = templatePath
     ? resolve(templatePath)
-    : resolve(__dirname, "../templates/default-release-note.html");
+    : DEFAULT_RELEASE_NOTE_TEMPLATE_PATH;
 
   if (templatePath && !existsSync(resolvedTemplatePath)) {
     throw new Error(`Release note template not found: ${resolvedTemplatePath}`);

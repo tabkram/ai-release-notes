@@ -6,6 +6,19 @@ import { simpleGit, type SimpleGit } from "simple-git";
 import type { ParsedCommit } from "./types.js";
 
 /**
+ * The `from` value that stands for the whole history rather than for a tag.
+ *
+ * A release generated from it has no predecessor to compare against: it is the
+ * first one, and whatever would render that comparison says so instead.
+ */
+export const FIRST_RELEASE = "start";
+
+/** Whether a `from` value stands for the whole history. */
+export function isFirstRelease(from: string | undefined): boolean {
+  return from === FIRST_RELEASE;
+}
+
+/**
  * Extract commits between two tags/refs.
  */
 export async function getChangelog(
@@ -15,7 +28,7 @@ export async function getChangelog(
 ): Promise<string[]> {
   const git: SimpleGit = simpleGit(repoPath || process.cwd());
   const log =
-    from === "start"
+    isFirstRelease(from)
       ? await git.log([to])
       : await git.log({
           from,

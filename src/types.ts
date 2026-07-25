@@ -105,6 +105,8 @@ export const OutputsConfigSchema = z.union([
 export const OutputIndexConfigSchema = z.object({
   format: z.enum(["markdown", "html"]).default("markdown"),
   template: z.string().optional(),
+  /** Markup for one listed release, with `{{slot}}` placeholders. */
+  entryTemplate: z.string().optional(),
   saveTo: z.string().min(1),
 });
 

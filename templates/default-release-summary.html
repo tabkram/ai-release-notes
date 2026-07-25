@@ -45,7 +45,7 @@
           font-size: 2rem;
       }
 
-      .intro, .release-meta, footer {
+      .intro, .release-entry p, footer {
           color: var(--muted);
       }
 
@@ -86,13 +86,16 @@
           font-size: 1.2rem;
       }
 
-      .release-meta {
+      /* The metadata line, then the link to the release notes. */
+      .release-entry p {
           margin: 0.45rem 0 1rem;
           font-size: 0.925rem;
       }
 
-      .release-link {
+      .release-entry p:last-child {
           margin: 0;
+          color: var(--text);
+          font-size: 1rem;
           font-weight: 600;
       }
 
@@ -116,6 +119,7 @@
 
   {{languages}}
 
+  <!-- Where the releases are listed, the newest one first. -->
   <!-- ai-release-notes:releases -->
   {{releases}}
 </main>

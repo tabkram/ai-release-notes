@@ -160,7 +160,9 @@ The main parts are simple:
   See [Instructions](#instructions).
 - `output` lists the Markdown and/or HTML release files to create. Use
   `{env}`, `{lang}`, `{from}`, and `{to}` in their names. Missing `--from` and
-  `--to` become `start` and `end`.
+  `--to` become `start` and `end`. A name carrying `{from}` or `{to}` belongs
+  to a single release, so regenerating it rewrites that file. A name without
+  either is shared by every release, and each new one is added to it.
 - `outputIndex` is optional. It maintains a release summary with links to
   every release file. It may be one destination or a list, for example one
   Markdown and one HTML summary. Add `{lang}` when each language needs its own
@@ -172,6 +174,45 @@ The main parts are simple:
 
 Custom instruction and summary templates are optional. The generated config
 keeps their lines commented until you need them.
+
+### Index entries
+
+One listed release is one template: markup with `{{slot}}` placeholders, and
+nothing else. The bundled one lives in
+`templates/default-release-summary-entry.md` and `.html`:
+
+```html
+<section class="release-entry">
+<h2>Release {{toVersion}}</h2>
+<p><em>{{environment}} · {{date}} · Changes since {{fromVersion}}</em></p>
+<p><a href="{{href}}">Read release notes</a></p>
+</section>
+```
+
+The slots are `{{environment}}`, `{{date}}`, `{{fromVersion}}`, `{{toVersion}}`
+and `{{href}}`. Everything else is yours to write. Point `entryTemplate` at your
+own file to replace it:
+
+```yaml
+outputIndex:
+  - format: html
+    saveTo: ./releases/{env}/{lang}/index.html
+    template: ./templates/summary.html
+    entryTemplate: ./templates/entry.html
+```
+
+The entry template is translated together with the summary template, then
+stored in the generated index as data, so the index carries the shape it was
+created with, already in its language, and nothing of it is displayed.
+
+Each entry also stores what the index knows about its release — environment,
+versions, date, link — and the whole list is rendered again on every run. Edit
+the entry template, or switch the index to another language, and the entire
+history is relabelled at the next release.
+
+Entries written by version 0.2.0 or earlier carry no such record. They are kept
+word for word, below the rendered ones, since there is nothing to render them
+from; the index converges as new releases are added.
 
 For the exact configuration and comments, see the annotated
 [example `.ai-release-notes.yml`](examples/.ai-release-notes.yml). The
