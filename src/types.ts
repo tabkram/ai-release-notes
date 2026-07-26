@@ -4,6 +4,8 @@
 
 import { z } from "zod";
 
+import type { ReleaseFormat } from "./release-document.js";
+
 // ─────────────────────────────────────────
 // Commit types
 // ─────────────────────────────────────────
@@ -154,6 +156,8 @@ export interface GenerateOptions {
   date?: string;
   /** Override LLM provider */
   provider?: ProviderName | string;
+  /** Write one configured language only, instead of every one of them. */
+  language?: string;
   /** Path to config file */
   configPath?: string;
   /** Raw changelog text (skip git extraction) */
@@ -166,10 +170,10 @@ export interface GenerateOptions {
   clipboard?: boolean;
   /** Output file path */
   outputPath?: string;
-  /** Output folder (default: current dir) */
-  outputDir?: string;
-  /** Output format: md or html */
-  format?: "md" | "html";
+  /** Write the release into this folder (default: current dir) */
+  toDir?: string;
+  /** Output format, as `output.format` names it. */
+  format?: ReleaseFormat;
   /** Template file path (Handlebars/Mustache) */
   template?: string;
   /**

@@ -125,6 +125,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   // ── Build prompts ──
   const languages = config.prompt?.languages?.length ? config.prompt.languages : ["en"];
   const primaryLanguage = languages[0];
+  const onlyLanguage = resolveRequestedLanguage(languages, options.language);
   const systemPrompt = await buildSystemPrompt(config.prompt);
   const date = await resolveReleaseDate(options, options.toVersion);
 
@@ -192,6 +193,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
     const translationInstructions = await resolveInstructions(config.prompt?.instructions);
     for (const language of languages.slice(1)) {
+      // Asking for one language still writes the first one: it is what the
+      // others are translated from, so it is generated and then left out.
+      if (onlyLanguage && language !== onlyLanguage) continue;
       const translatedRelease = await callLLM(
         providerName,
         providerConfig,
@@ -216,7 +220,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const localized = [{
     language: primaryLanguage,
     markdown: primaryMarkdown,
-  }, ...translatedReleases];
+  }, ...translatedReleases].filter((release) => !onlyLanguage || release.language === onlyLanguage);
   const markdown = localized
     .map((release, index) => index === 0
       ? release.markdown
@@ -243,7 +247,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     ? (Array.isArray(config.output) ? config.output : [config.output])
     : [];
   const needsHtml = outputConfigs.some((output) => output.format === "html");
-  const outputFormat = options.format || outputConfigs[0]?.format || "md";
+  const outputFormat = options.format || outputConfigs[0]?.format || "markdown";
   if (outputFormat === "html" || needsHtml) {
     const htmlOutput = outputConfigs.find((output) => output.format === "html");
     const template = await loadReleaseNoteTemplate(options.template || htmlOutput?.template);
@@ -263,6 +267,27 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   usage.durationMs = Date.now() - startedAt;
 
   return result;
+}
+
+/**
+ * The one language a run was narrowed to, if it was narrowed at all.
+ *
+ * A language that is not configured is a mistake worth stopping on rather than
+ * a run that quietly writes nothing: the configured ones are named back.
+ */
+function resolveRequestedLanguage(configured: string[], requested?: string): string | undefined {
+  if (!requested) return undefined;
+
+  const language = configured.find(
+    (candidate) => candidate.toLowerCase() === requested.trim().toLowerCase()
+  );
+  if (!language) {
+    throw new Error(
+      `Language "${requested}" is not configured. ` +
+      `Use one of prompt.languages: ${configured.join(", ")}.`
+    );
+  }
+  return language;
 }
 
 /** Load a custom release-note template, falling back to the bundled HTML template. */

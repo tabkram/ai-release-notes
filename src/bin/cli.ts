@@ -18,6 +18,7 @@ import { formatOutputPath, isReleaseSpecificPath } from "../output-path.js";
 import { promote, PromotionError } from "../promote.js";
 import { PromptError, PromptSession, type PromptEditResult } from "../prompt-session.js";
 import { changedLines } from "../text-diff.js";
+import type { ReleaseFormat } from "../release-document.js";
 import { FIRST_RELEASE, getLatestTag } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
@@ -57,6 +58,18 @@ function printStatus(stdout: boolean, message: string): void {
     return;
   }
   console.log(message);
+}
+
+/**
+ * The output format, under the one name the rest of the tool knows it by.
+ *
+ * `output.format` in the configuration has always said `markdown`, and so does
+ * every type here, so `md` on the command line is read as the same thing rather
+ * than being a second word for it.
+ */
+function releaseFormat(value?: string): ReleaseFormat | undefined {
+  if (!value) return undefined;
+  return value === "md" ? "markdown" : (value as ReleaseFormat);
 }
 
 /** Where a prompt comes from, for the verbose report. */
@@ -160,7 +173,6 @@ program
 // ── generate ──
 program
   .command("generate")
-  .alias("gen")
   .description("Generate release notes from git tags")
   .option(
     "--from <version>",
@@ -169,14 +181,15 @@ program
   )
   .option("--to <version>", "Current version tag (e.g. v1.1.0)")
   .requiredOption("--env <environment>", "Environment: PROD, STAGING, DEV...")
-  .option("--date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
+  .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
+  .option("--lang <language>", "Write one configured language only")
   .option("--config <path>", "Path to config file")
   .option("--output <path>", "Output file path (override config)")
-  .option("--output-dir <dir>", "Output directory (default: current dir)")
-  .option("--format <format>", "Output format: md or html")
+  .option("--to-dir <dir>", "Write the release into this folder (default: current dir)")
+  .option("--format <format>", "Output format: markdown or html")
   .option("--template <path>", "Path to custom template file")
-  .option("--changelog <path>", "Path to a file containing raw changelog (skip git)")
+  .option("--changelog-file <path>", "Path to a file containing raw changelog (skip git)")
   .option("--context <paths...>", "Context files or directories (specs, models, etc.)")
   .option("--dry-run", "Show prompts without calling LLM")
   .option("-v, --verbose", "Show applied instructions and generation steps")
@@ -187,6 +200,7 @@ program
     let config: ReleaseNotesConfig | undefined;
     let summaryPrinted = false;
     try {
+      const format = releaseFormat(opts.format);
       // Start at the repository's first commit unless an explicit tag/ref is provided.
       const fromVersion = opts.from;
       let toVersion = opts.to;
@@ -210,13 +224,14 @@ program
         environment: opts.env,
         date: opts.date,
         provider: opts.with,
+        language: opts.lang,
         configPath: opts.config,
-        changelogFile: opts.changelog,
+        changelogFile: opts.changelogFile,
         dryRun: opts.dryRun,
         clipboard: opts.clipboard,
         outputPath: opts.output,
-        outputDir: opts.outputDir,
-        format: opts.format,
+        toDir: opts.toDir,
+        format,
         template: opts.template,
         context: opts.context,
       });
@@ -234,12 +249,12 @@ program
 
       // Determine output path
       let outputTargets: OutputTarget[] = !opts.stdout && opts.output
-        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format, ownedByRelease: true }]
+        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format, ownedByRelease: true }]
         : [];
-      if (!opts.stdout && outputTargets.length === 0 && opts.outputDir) {
-        const ext = opts.format === "html" ? "html" : "md";
-        const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${ext}`;
-        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format, ownedByRelease: true }];
+      if (!opts.stdout && outputTargets.length === 0 && opts.toDir) {
+        const extension = format === "html" ? "html" : "md";
+        const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${extension}`;
+        outputTargets = [{ path: join(resolve(opts.toDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format, ownedByRelease: true }];
       }
 
       if (!opts.stdout && outputTargets.length === 0) {
@@ -353,7 +368,6 @@ program
 // ── promote ──
 program
   .command("promote")
-  .alias("levelup")
   .description("Move release notes from one environment to the next, reusing their wording")
   .option("--from-env <environment>", "Environment to promote from: QUA, STAGING... (default: --from-dir's name)")
   .option("--to-env <environment>", "Environment to promote to: PROD, PREPROD... (default: --to-dir's name)")
@@ -362,12 +376,12 @@ program
   .option("--from-dir <dir>", "Read the source releases from this folder")
   .option("--to-dir <dir>", "Write the promoted releases to this folder")
   .option("--pattern <pattern>", "File name inside those folders, with {from} and {to}")
-  .option("--merge <strategy>", "Several releases into one: sections or concat", "sections")
   .option("--with <provider>", "LLM provider used to write the opening of a merged range")
   .option("--lang <language>", "Promote one language only")
-  .option("--date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
+  .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--config <path>", "Path to config file")
   .option("--dry-run", "Show what would be promoted without writing anything")
+  .option("-v, --verbose", "Show what was promoted, release by release")
   .option("--stdout", "Write the promoted release notes to the terminal without saving files")
   .action(async (opts) => {
     try {
@@ -390,7 +404,6 @@ program
         fromDir: opts.fromDir,
         toDir: opts.toDir,
         pattern: opts.pattern,
-        merge: opts.merge === "concat" ? "concat" : "sections",
         provider: opts.with,
         language: opts.lang,
         date: opts.date,
@@ -432,10 +445,13 @@ program
         console.log(result.files.map((file) => file.content).join("\n\n"));
       }
 
-      if (opts.dryRun || opts.stdout) {
+      if (opts.verbose || opts.dryRun || opts.stdout) {
         for (const file of result.files) {
           printStatus(opts.stdout, chalk.gray(`   ${file.path} ← ${file.sources.join(", ")}`));
         }
+      }
+
+      if (opts.dryRun || opts.stdout) {
         printStatus(opts.stdout, chalk.gray(
           result.metadata.usage.modelCalls === 0
             ? "\n🤖 No model was called: the wording is the one already reviewed."
@@ -484,7 +500,6 @@ program
 // ── prompt ──
 program
   .command("prompt")
-  .alias("ask")
   .description("Ask, in your own words, for a change to release notes already written")
   .requiredOption("--env <environment>", "Whose release notes to open: PROD, QUA, DEV...")
   .option("--from <version>", "Open only the releases a range covers, from here")
@@ -499,6 +514,8 @@ program
     [] as string[]
   )
   .option("--dry-run", "Show what the requests would change without writing anything")
+  .option("-v, --verbose", "Show the provider and instructions the requests are answered with")
+  .option("--stdout", "Write the revised release notes to the terminal without saving files")
   .action(async (opts) => {
     try {
       const session = await PromptSession.open({
@@ -510,14 +527,21 @@ program
         configPath: opts.config,
       });
 
-      printOpenDocuments(session);
+      printOpenDocuments(session, opts.stdout);
+      if (opts.verbose) printVerbosePromptDetails(opts.stdout, session);
 
       if (opts.ask.length > 0) {
-        const failures = await runRequestedChanges(session, opts.ask, opts.dryRun);
-        await savePromptSession(session, opts.dryRun);
+        const failures = await runRequestedChanges(session, opts.ask, opts.dryRun, opts.stdout);
+        await savePromptSession(session, opts.dryRun, opts.stdout);
         // CI asked for something and is entitled to know it did not happen.
         if (failures > 0) process.exit(1);
         return;
+      }
+
+      // Asking questions at a prompt is a conversation, and a conversation has
+      // nowhere to write its answers but the terminal it is held in.
+      if (opts.stdout) {
+        throw new PromptError("--stdout needs --ask: there is no conversation to hold when the terminal is the output.");
       }
 
       await holdConversation(session, opts.dryRun);
@@ -681,14 +705,15 @@ async function answerMessage(
 async function runRequestedChanges(
   session: PromptSession,
   requests: string[],
-  dryRun: boolean
+  dryRun: boolean,
+  stdout = false
 ): Promise<number> {
   let failures = 0;
 
   for (const request of requests) {
-    console.log(chalk.cyan(`\n› ${request}`));
+    printStatus(stdout, chalk.cyan(`\n› ${request}`));
     const action = await session.route(request);
-    if (action.reply) console.log(chalk.gray(`   ${action.reply}`));
+    if (action.reply) printStatus(stdout, chalk.gray(`   ${action.reply}`));
 
     // A script asked for a change to the release notes, so that is all that is
     // acted on here: saving is what the end of the run is for, and taking a
@@ -697,15 +722,28 @@ async function runRequestedChanges(
       ? session.dedupe()
       : await session.revise(action.action === "revise" ? action.instruction : request);
 
-    failures += printPromptEdits(result);
+    failures += printPromptEdits(result, stdout);
   }
 
   return failures;
 }
 
-function printOpenDocuments(session: PromptSession): void {
+function printVerbosePromptDetails(stdout: boolean, session: PromptSession): void {
+  const languages = [...new Set(session.documents.flatMap((d) => d.language ? [d.language] : []))];
+
+  printStatus(stdout, chalk.gray("\n🧭 Session details"));
+  printStatus(stdout, chalk.gray(`   Provider: ${session.provider}`));
+  printStatus(stdout, chalk.gray(
+    `   Instructions: ${describePromptSource(session.config.prompt?.instructions)}`
+  ));
+  if (languages.length > 0) {
+    printStatus(stdout, chalk.gray(`   Languages open: ${languages.join(", ")}`));
+  }
+}
+
+function printOpenDocuments(session: PromptSession, stdout = false): void {
   const count = session.documents.length;
-  console.log(chalk.blue(
+  printStatus(stdout, chalk.blue(
     `\n📝 ${count} release note${count === 1 ? "" : "s"} open for ${session.environment}`
   ));
 
@@ -713,18 +751,18 @@ function printOpenDocuments(session: PromptSession): void {
     const range = [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
     const language = document.language ? ` [${document.language}]` : "";
     const pending = document.content !== document.saved ? chalk.yellow(" (changed)") : "";
-    console.log(
+    printStatus(stdout,
       chalk.gray(`   ${relative(process.cwd(), document.path)}`) +
       chalk.gray(range ? `  ${range}` : "") + chalk.gray(language) + pending
     );
     if (document.unrevisable) {
-      console.log(chalk.yellow(`      ⚠️  ${document.unrevisable}`));
+      printStatus(stdout, chalk.yellow(`      ⚠️  ${document.unrevisable}`));
     }
   }
 }
 
 /** Report what a request did, and return how many files it failed on. */
-function printPromptEdits(result: PromptEditResult): number {
+function printPromptEdits(result: PromptEditResult, stdout = false): number {
   let changed = 0;
   let failed = 0;
 
@@ -732,11 +770,11 @@ function printPromptEdits(result: PromptEditResult): number {
     const path = relative(process.cwd(), edit.path);
     if (edit.skipped) {
       failed += 1;
-      console.log(chalk.yellow(`   ⏭️  ${path} — ${edit.skipped}`));
+      printStatus(stdout, chalk.yellow(`   ⏭️  ${path} — ${edit.skipped}`));
       continue;
     }
     if (!edit.changed) {
-      console.log(chalk.gray(`   ·   ${path} — nothing there to change`));
+      printStatus(stdout, chalk.gray(`   ·   ${path} — nothing there to change`));
       continue;
     }
 
@@ -744,38 +782,49 @@ function printPromptEdits(result: PromptEditResult): number {
     const removed = edit.removed?.length
       ? chalk.gray(`  (${edit.removed.length} repeated line${edit.removed.length === 1 ? "" : "s"})`)
       : "";
-    console.log(chalk.green(`   ✏️  ${path}`) + removed);
-    printDiff(edit.before, edit.after);
+    printStatus(stdout, chalk.green(`   ✏️  ${path}`) + removed);
+    printDiff(edit.before, edit.after, stdout);
   }
 
   const usage = result.via === "comparison"
     ? " | no model call: the lines were compared exactly"
     : ` | ${formatNumber(result.usage.totalTokens)} tokens | ${result.usage.modelCalls} model call${result.usage.modelCalls === 1 ? "" : "s"} | ${formatDuration(result.usage.durationMs)}`;
-  console.log(chalk.gray(`\n   ${changed} of ${result.edits.length} revised${usage}`));
+  printStatus(stdout, chalk.gray(`\n   ${changed} of ${result.edits.length} revised${usage}`));
 
   return failed;
 }
 
-function printDiff(before: string, after: string): void {
+function printDiff(before: string, after: string, stdout = false): void {
   // A line that only gained or lost blank space is not a change anyone asked to
   // review, and a long run of them would bury the ones that are.
   const changes = changedLines(before, after).filter((line) => line.text.trim());
 
   for (const line of changes.slice(0, DIFF_LINE_LIMIT)) {
-    console.log(line.kind === "added"
+    printStatus(stdout, line.kind === "added"
       ? chalk.green(`      + ${line.text.trim()}`)
       : chalk.red(`      - ${line.text.trim()}`));
   }
 
   if (changes.length > DIFF_LINE_LIMIT) {
-    console.log(chalk.gray(`      … ${changes.length - DIFF_LINE_LIMIT} more changed lines`));
+    printStatus(stdout, chalk.gray(`      … ${changes.length - DIFF_LINE_LIMIT} more changed lines`));
   }
 }
 
-async function savePromptSession(session: PromptSession, dryRun: boolean): Promise<void> {
+async function savePromptSession(
+  session: PromptSession,
+  dryRun: boolean,
+  stdout = false
+): Promise<void> {
   const pending = session.pending();
   if (pending.length === 0) {
-    console.log(chalk.gray("\n   Nothing to write: the release notes are as they were."));
+    printStatus(stdout, chalk.gray("\n   Nothing to write: the release notes are as they were."));
+    return;
+  }
+
+  // The revised notes are the output asked for, so they go out whole and
+  // nothing is written over: what to keep is the caller's to decide.
+  if (stdout) {
+    console.log(pending.map((document) => document.content).join("\n\n"));
     return;
   }
 

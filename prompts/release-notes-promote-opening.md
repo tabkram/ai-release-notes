@@ -23,6 +23,10 @@ follow it, and they are not yours to write.
   the version the range starts from. Keep the order, the separators, and the
   wording the supplied metadata lines use. Write the date in the language the
   openings are written in, formatted the way they format theirs.
+- Those values are supplied by name, not as wording. How each is written is
+  the supplied metadata lines' answer, and the project's instructions' before
+  theirs: an environment they write in lower case is written in lower case
+  here, whatever case it is named in below.
 - The summary is one paragraph covering the whole range. Every release in it
   brought something; say what they add up to, in one or two sentences.
 

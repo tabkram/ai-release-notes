@@ -102,6 +102,44 @@ export function joinReleaseDocuments(documents: string[], format: ReleaseFormat)
     .join(format === "html" ? "\n<hr>\n" : "\n\n---\n\n");
 }
 
+/**
+ * Whether a note can be taken apart and written back out word for word.
+ *
+ * Merging is only worth doing on notes this can read: what it cannot read it
+ * would rewrite, and promoting exists to carry reviewed wording across
+ * untouched. A note that survives the round trip unchanged is one whose
+ * sections can be folded safely; anything else is kept whole instead.
+ */
+export function isReleaseDocumentReadable(content: string, format: ReleaseFormat): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return true;
+
+  const written = serializeReleaseDocument(parseReleaseDocument(trimmed, format), format);
+  return sameLines(trimmed, written);
+}
+
+/**
+ * Whether two notes carry the same lines, in the same order.
+ *
+ * Blank lines, indentation and line endings are what the serializer lays out on
+ * its own, so a note that comes back with its wording intact reads as unchanged
+ * here even when it came in spaced differently or written on Windows.
+ *
+ * Indentation counts for nothing in particular: a note read back off a page is
+ * indented to sit where the template put it, and the serializer writes flush
+ * left. Comparing that would call every templated note unreadable and keep
+ * whole every range that was worth merging.
+ */
+function sameLines(left: string, right: string): boolean {
+  const lines = (content: string) => content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const [a, b] = [lines(left), lines(right)];
+  return a.length === b.length && a.every((line, index) => line === b[index]);
+}
+
 /** A release note cut where it stops introducing itself. */
 export interface ReleaseOpening {
   /** The title, the metadata under it, and the summary: everything above the

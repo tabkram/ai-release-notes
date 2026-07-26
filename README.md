@@ -113,14 +113,15 @@ time. Translated releases include every translation call in these totals.
 | `--from <version>` | Previous version tag, or `start` for the full history (default: `start`) |
 | `--to <version>` | Current version tag |
 | `--env <env>` | **Required.** Environment name (PROD, STAGING, etc.) |
-| `--date <value>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
+| `--date <date>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
 | `--with <provider>` | LLM override; see [provider aliases](#1-providers-and-api-keys) |
+| `--lang <language>` | Write one configured language only (default: all of them) |
 | `--config <path>` | Path to config file |
 | `--output <path>` | Output file path (overrides `output.saveTo`) |
-| `--output-dir <dir>` | Output directory (auto-names the file) |
-| `--format <md\|html>` | Output format (default: `md`) |
+| `--to-dir <dir>` | Write the release into this folder (auto-names the file) |
+| `--format <markdown\|html>` | Output format (default: `markdown`) |
 | `--template <path>` | Custom template file |
-| `--changelog <path>` | Raw changelog file (skip git) |
+| `--changelog-file <path>` | Raw changelog file (skip git) |
 | `--context <paths...>` | Context files or directories (mixed) |
 | `--dry-run` | Show prompts without calling LLM |
 | `-v, --verbose` | Show applied instructions and generation steps |
@@ -158,8 +159,6 @@ npx ai-release-notes promote --from-env QUA --to-env PROD
 npx ai-release-notes promote --from-env QUA --to-env PROD --from start --to v0.23.0
 ```
 
-`ai-release-notes levelup` is the same command.
-
 Each release file names the range it covers, so the files themselves form the
 chain — `start → v0.23.0`, `v0.23.0 → v0.24.0`, and so on. Promoting reads that
 chain rather than the version numbers, so a project that does not release in
@@ -170,8 +169,11 @@ ascending order is followed just as well.
   the whole range: sections carrying the same heading become one section,
   their scopes become one scope, their lists become one list, and a line two
   releases both carry is listed once. Inside a list the newest release's lines
-  come first, then the ones released before them. `--merge concat` keeps each
-  note whole instead, one after the other.
+  come first, then the ones released before them.
+- **A note whose shape cannot be read back** — it is never rewritten to fit.
+  The notes are kept whole and put one after another instead. Nothing to
+  choose: a note that does not survive being read and written out unchanged
+  answers this on its own.
 
 Every section survives that merge word for word — the reviewed wording is the
 whole point. What cannot survive it is the opening: three headings, three dates
@@ -231,18 +233,18 @@ outputs are reported as skipped.
 
 | Option | Description |
 |--------|-------------|
-| `--from-env <env>` | Environment to promote from (default: `--from-dir`'s folder name) |
-| `--to-env <env>` | Environment to promote to (default: `--to-dir`'s folder name) |
+| `--from-env <environment>` | Environment to promote from (default: `--from-dir`'s folder name) |
+| `--to-env <environment>` | Environment to promote to (default: `--to-dir`'s folder name) |
 | `--from <version>` | Start of the range (default: where the target environment is) |
 | `--to <version>` | End of the range (default: the newest release in the source) |
 | `--from-dir <dir>` / `--to-dir <dir>` | Read/write the releases in these folders |
 | `--pattern <pattern>` | File name inside those folders (default: the configured one) |
-| `--merge <sections\|concat>` | How several releases become one note (default: `sections`) |
 | `--with <provider>` | LLM provider used to write the opening of a merged range |
 | `--lang <language>` | Promote one language only |
-| `--date <value>` | Release date: `now` (default), `tag`, or an ISO date |
+| `--date <date>` | Release date: `now` (default), `tag`, or an ISO date |
 | `--config <path>` | Path to config file |
 | `--dry-run` | Show what would be promoted without writing anything |
+| `-v, --verbose` | Show what was promoted, release by release |
 | `--stdout` | Write the promoted notes to the terminal without saving files |
 
 An HTML release note is read back out of the page it was written into and
@@ -285,7 +287,7 @@ npx ai-release-notes prompt --env PRD --from v1.25.7 --to v1.28.0 --with mistral
 There is nothing to learn first. Every answer is read by a model that works out
 what it meant — a change to make, a change to take back, a request to save, or
 that you are done — so "put that back", "actually leave it", and "that's all"
-all work. `ai-release-notes ask` is the same command.
+all work.
 
 Without `--from` and `--to`, every release note the environment holds is opened
 at once, and each request is applied to all of them.
@@ -315,13 +317,15 @@ npx ai-release-notes prompt --env PRD \
 
 | Option | Description |
 |--------|-------------|
-| `--env <env>` | **Required.** Whose release notes to open |
+| `--env <environment>` | **Required.** Whose release notes to open |
 | `--from <version>` / `--to <version>` | Open only the releases a range covers |
 | `--lang <language>` | Open one language only |
 | `--with <provider>` | LLM override; see [provider aliases](#1-providers-and-api-keys) |
 | `--config <path>` | Path to config file |
 | `--ask <request>` | Apply a request with nothing to answer. Repeatable, for CI |
 | `--dry-run` | Show what the requests would change without writing anything |
+| `-v, --verbose` | Show the provider and instructions the requests are answered with |
+| `--stdout` | Write the revised notes to the terminal without saving files (needs `--ask`) |
 
 An HTML release note is a whole page, so only the note on it is ever sent or
 replaced: the page keeps its head, its styles, its footer, and the values the
@@ -540,7 +544,7 @@ const result = await generate({
   environment: "PROD",
   provider: "claude",  // only ANTHROPIC_API_KEY is needed
   format: "html",
-  outputDir: "./docs/releases",
+  toDir: "./docs/releases",
   context: ["./specs/api-v2.md", "./docs/models/"],
 });
 

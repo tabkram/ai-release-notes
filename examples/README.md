@@ -246,8 +246,9 @@ missing is worked out from them, and the PROD files and index are written.
 If PROD is several releases behind, every release in between comes along and
 the notes are merged into the one note covering the whole range: sections
 carrying the same heading become one section, their lists become one list, and
-a line two releases share is listed once. `--merge concat` keeps each note
-whole instead.
+a line two releases share is listed once. A note whose shape cannot be read
+back is never rewritten to fit: those are kept whole and put one after another
+instead, with nothing to choose.
 
 `--dry-run` shows the plan — which releases would be taken, into which files —
 without writing anything:

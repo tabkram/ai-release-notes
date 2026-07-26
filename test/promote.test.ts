@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { discoverReleases, formatOutputPath } from "../src/output-path.js";
 import {
   extractReleaseContent,
+  isReleaseDocumentReadable,
   mergeReleaseDocuments,
   parseReleaseDocument,
   serializeReleaseDocument,
@@ -310,6 +311,20 @@ test("merges two notes read back off a page that wraps them", () => {
   assert.equal(merged.match(/<h2>Fixes<\/h2>/g)?.length, 1);
   assert.match(merged, /Fixed login\./);
   assert.match(merged, /Fixed export\./);
+});
+
+test("reads back a note it can merge, whatever it was spaced or typed like", () => {
+  assert.ok(isReleaseDocumentReadable(firstNote, "markdown"));
+  assert.ok(isReleaseDocumentReadable(firstNote.replace(/\n/g, "\r\n"), "markdown"));
+  assert.ok(isReleaseDocumentReadable(firstNote.replace(/\n\n/g, "\n\n\n"), "markdown"));
+  assert.ok(isReleaseDocumentReadable(
+    "<h1>Release v1</h1>\n<h2>Fixes</h2>\n<ul>\n<li>Fixed login.</li>\n</ul>",
+    "html"
+  ));
+});
+
+test("says so when a note's shape cannot be followed, so it is kept whole", () => {
+  assert.equal(isReleaseDocumentReadable("<ul><li>Fixed login.</li></ul>", "html"), false);
 });
 
 test("keeps a single release exactly as it was written", () => {
