@@ -16,10 +16,12 @@ import {
 } from "../output-index.js";
 import { formatOutputPath, isReleaseSpecificPath } from "../output-path.js";
 import { promote, PromotionError } from "../promote.js";
+import { PromptError, PromptSession, type PromptEditResult } from "../prompt-session.js";
+import { changedLines } from "../text-diff.js";
 import { FIRST_RELEASE, getLatestTag } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { resolve, join, dirname, basename } from "path";
+import { resolve, join, dirname, basename, relative } from "path";
 import clipboardy from "clipboardy";
 import ora from "ora";
 import type {
@@ -460,6 +462,53 @@ program
     }
   });
 
+// ── prompt ──
+program
+  .command("prompt")
+  .alias("ask")
+  .description("Ask, in your own words, for a change to release notes already written")
+  .requiredOption("--env <environment>", "Whose release notes to open: PROD, QUA, DEV...")
+  .option("--from <version>", "Open only the releases a range covers, from here")
+  .option("--to <version>", "Open only the releases a range covers, up to here")
+  .option("--lang <language>", "Open one language only")
+  .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
+  .option("--config <path>", "Path to config file")
+  .option(
+    "--ask <request>",
+    "Apply a request and save, with nothing to answer. Repeatable, for CI",
+    (value: string, previous: string[]) => [...previous, value],
+    [] as string[]
+  )
+  .option("--dry-run", "Show what the requests would change without writing anything")
+  .action(async (opts) => {
+    try {
+      const session = await PromptSession.open({
+        environment: opts.env,
+        fromVersion: opts.from,
+        toVersion: opts.to,
+        language: opts.lang,
+        provider: opts.with,
+        configPath: opts.config,
+      });
+
+      printOpenDocuments(session);
+
+      if (opts.ask.length > 0) {
+        const failures = await runRequestedChanges(session, opts.ask, opts.dryRun);
+        await savePromptSession(session, opts.dryRun);
+        // CI asked for something and is entitled to know it did not happen.
+        if (failures > 0) process.exit(1);
+        return;
+      }
+
+      await holdConversation(session, opts.dryRun);
+    } catch (err: any) {
+      const message = err instanceof PromptError ? err.message : (err?.message || String(err));
+      console.error(chalk.red("\n❌ Error:"), message);
+      process.exit(1);
+    }
+  });
+
 // ── providers ──
 program
   .command("providers")
@@ -485,6 +534,243 @@ program.parse();
 /** The name of a folder, used as the environment it holds. */
 function folderName(directory?: string): string | undefined {
   return directory ? basename(resolve(directory)) : undefined;
+}
+
+// ─────────────────────────────────────────
+// Asking for a change, in your own words
+// ─────────────────────────────────────────
+
+/** Changed lines shown per file before the rest is summarized. */
+const DIFF_LINE_LIMIT = 24;
+
+/**
+ * A spinner that keeps quiet when nobody is watching it turn.
+ *
+ * The conversation reads its answers from wherever standard input comes from,
+ * so it runs just as well down a pipe — and there a spinner is a line of log
+ * noise landing in the middle of the question it was asked.
+ */
+function progress(text: string) {
+  return ora({ text, isSilent: !process.stdout.isTTY }).start();
+}
+
+/**
+ * Hold the conversation: ask what to change, do it, ask again.
+ *
+ * Nothing has to be learned first — every answer is read by a model that says
+ * what it meant, so "drop the docker part", "put that back" and "that's it" all
+ * work. Answers can equally arrive down a pipe, which is what makes the same
+ * loop usable from a script.
+ */
+async function holdConversation(session: PromptSession, dryRun: boolean): Promise<void> {
+  const { createInterface } = await import("node:readline/promises");
+  const input = createInterface({ input: process.stdin, output: process.stdout });
+  input.on("SIGINT", () => input.close());
+
+  const state = { leaving: false, warnedAboutUnsaved: false };
+  console.log(chalk.bold("\n💬 Is there anything you would like to change?"));
+  console.log(chalk.gray("   Say it in your own words. Say you are done when you are done."));
+  input.setPrompt(chalk.cyan("\n› "));
+  input.prompt();
+
+  for await (const line of input) {
+    if (line.trim()) {
+      await answerMessage(session, line, dryRun, state);
+      if (state.leaving) break;
+    }
+    input.prompt();
+  }
+
+  input.close();
+  if (session.pending().length > 0 && !state.leaving) {
+    console.log(chalk.yellow(
+      `\n⚠️  ${session.pending().length} release note(s) still hold changes that were never written.`
+    ));
+  }
+}
+
+/** Do what one message asked for, and say what happened. */
+async function answerMessage(
+  session: PromptSession,
+  message: string,
+  dryRun: boolean,
+  state: { leaving: boolean; warnedAboutUnsaved: boolean }
+): Promise<void> {
+  const reading = progress("💭 Reading what you asked for...");
+  const action = await session.route(message);
+  reading.stop();
+  if (action.reply) console.log(chalk.gray(`   ${action.reply}`));
+
+  switch (action.action) {
+    case "revise": {
+      const working = progress("✍️  Revising...");
+      const result = await session.revise(action.instruction);
+      working.stop();
+      printPromptEdits(result);
+      return;
+    }
+
+    case "dedupe":
+      printPromptEdits(session.dedupe());
+      return;
+
+    case "undo":
+      console.log(session.undo()
+        ? chalk.green("↩️  Took back the last change.")
+        : chalk.gray("Nothing to take back."));
+      return;
+
+    case "reset":
+      session.reset();
+      console.log(chalk.green("↩️  The release notes are back to the way they were saved."));
+      return;
+
+    case "save":
+      await savePromptSession(session, dryRun);
+      return;
+
+    case "list":
+      printOpenDocuments(session);
+      return;
+
+    case "done": {
+      const pending = session.pending().length;
+      // Leaving unsaved work behind is worth one question, and exactly one:
+      // saying it a second time means it was meant.
+      if (pending > 0 && !state.warnedAboutUnsaved && !dryRun) {
+        state.warnedAboutUnsaved = true;
+        console.log(chalk.yellow(
+          `\n⚠️  ${pending} release note(s) hold changes that are not written yet.`
+        ));
+        console.log(chalk.gray("   Ask me to save them, or say you are done again to leave them alone."));
+        return;
+      }
+      state.leaving = true;
+      console.log(chalk.gray("\n👋 Done."));
+      return;
+    }
+
+    case "unclear":
+      if (!action.reply) {
+        console.log(chalk.gray("   I did not follow that. What should change in the release notes?"));
+      }
+      return;
+  }
+}
+
+/** Apply the requests a command line carried, and report how many failed. */
+async function runRequestedChanges(
+  session: PromptSession,
+  requests: string[],
+  dryRun: boolean
+): Promise<number> {
+  let failures = 0;
+
+  for (const request of requests) {
+    console.log(chalk.cyan(`\n› ${request}`));
+    const action = await session.route(request);
+    if (action.reply) console.log(chalk.gray(`   ${action.reply}`));
+
+    // A script asked for a change to the release notes, so that is all that is
+    // acted on here: saving is what the end of the run is for, and taking a
+    // change back has nothing to take back.
+    const result = action.action === "dedupe"
+      ? session.dedupe()
+      : await session.revise(action.action === "revise" ? action.instruction : request);
+
+    failures += printPromptEdits(result);
+  }
+
+  return failures;
+}
+
+function printOpenDocuments(session: PromptSession): void {
+  const count = session.documents.length;
+  console.log(chalk.blue(
+    `\n📝 ${count} release note${count === 1 ? "" : "s"} open for ${session.environment}`
+  ));
+
+  for (const document of session.documents) {
+    const range = [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
+    const language = document.language ? ` [${document.language}]` : "";
+    const pending = document.content !== document.saved ? chalk.yellow(" (changed)") : "";
+    console.log(
+      chalk.gray(`   ${relative(process.cwd(), document.path)}`) +
+      chalk.gray(range ? `  ${range}` : "") + chalk.gray(language) + pending
+    );
+    if (document.unrevisable) {
+      console.log(chalk.yellow(`      ⚠️  ${document.unrevisable}`));
+    }
+  }
+}
+
+/** Report what a request did, and return how many files it failed on. */
+function printPromptEdits(result: PromptEditResult): number {
+  let changed = 0;
+  let failed = 0;
+
+  for (const edit of result.edits) {
+    const path = relative(process.cwd(), edit.path);
+    if (edit.skipped) {
+      failed += 1;
+      console.log(chalk.yellow(`   ⏭️  ${path} — ${edit.skipped}`));
+      continue;
+    }
+    if (!edit.changed) {
+      console.log(chalk.gray(`   ·   ${path} — nothing there to change`));
+      continue;
+    }
+
+    changed += 1;
+    const removed = edit.removed?.length
+      ? chalk.gray(`  (${edit.removed.length} repeated line${edit.removed.length === 1 ? "" : "s"})`)
+      : "";
+    console.log(chalk.green(`   ✏️  ${path}`) + removed);
+    printDiff(edit.before, edit.after);
+  }
+
+  const usage = result.via === "comparison"
+    ? " | no model call: the lines were compared exactly"
+    : ` | ${formatNumber(result.usage.totalTokens)} tokens | ${result.usage.modelCalls} model call${result.usage.modelCalls === 1 ? "" : "s"} | ${formatDuration(result.usage.durationMs)}`;
+  console.log(chalk.gray(`\n   ${changed} of ${result.edits.length} revised${usage}`));
+
+  return failed;
+}
+
+function printDiff(before: string, after: string): void {
+  // A line that only gained or lost blank space is not a change anyone asked to
+  // review, and a long run of them would bury the ones that are.
+  const changes = changedLines(before, after).filter((line) => line.text.trim());
+
+  for (const line of changes.slice(0, DIFF_LINE_LIMIT)) {
+    console.log(line.kind === "added"
+      ? chalk.green(`      + ${line.text.trim()}`)
+      : chalk.red(`      - ${line.text.trim()}`));
+  }
+
+  if (changes.length > DIFF_LINE_LIMIT) {
+    console.log(chalk.gray(`      … ${changes.length - DIFF_LINE_LIMIT} more changed lines`));
+  }
+}
+
+async function savePromptSession(session: PromptSession, dryRun: boolean): Promise<void> {
+  const pending = session.pending();
+  if (pending.length === 0) {
+    console.log(chalk.gray("\n   Nothing to write: the release notes are as they were."));
+    return;
+  }
+
+  if (dryRun) {
+    console.log(chalk.yellow(`\n🔍 Dry run — ${pending.length} file(s) would be written:`));
+    for (const document of pending) {
+      console.log(chalk.gray(`   ${relative(process.cwd(), document.path)}`));
+    }
+    return;
+  }
+
+  for (const path of await session.save()) {
+    console.log(chalk.green(`💾 Saved ${relative(process.cwd(), path)}`));
+  }
 }
 
 function outputIndexConfigs(config: ReleaseNotesConfig): OutputIndexConfig[] {

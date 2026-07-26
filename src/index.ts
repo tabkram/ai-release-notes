@@ -19,6 +19,18 @@ export {
 } from "./promote.js";
 
 export {
+  PromptSession,
+  PromptError,
+  readSessionAction,
+  SESSION_ACTIONS,
+} from "./prompt-session.js";
+
+export {
+  diffLines,
+  changedLines,
+} from "./text-diff.js";
+
+export {
   discoverReleases,
   formatOutputPath,
   isReleaseSpecificPath,
@@ -33,7 +45,10 @@ export {
   mergeReleaseDocuments,
   joinReleaseDocuments,
   mergeSections,
+  dedupeReleaseDocument,
   extractReleaseContent,
+  releaseContentRange,
+  replaceReleaseContent,
 } from "./release-document.js";
 
 export {
@@ -70,6 +85,10 @@ export {
 export {
   buildSystemPrompt,
   buildUserPrompt,
+  buildEditSystemPrompt,
+  buildEditUserPrompt,
+  buildSessionRouterSystemPrompt,
+  buildSessionRouterUserPrompt,
   resolveInstructions,
   resolvePromptSource,
 } from "./prompts/builder.js";
@@ -78,6 +97,7 @@ export {
   renderReleaseNoteHtml,
   renderReleaseNotePage,
   markdownToHtml,
+  sanitizeReleaseHtml,
 } from "./release.js";
 
 export {
@@ -107,9 +127,27 @@ export type {
   PromotionSegment,
 } from "./promote.js";
 
+export type {
+  PromptSessionOptions,
+  PromptDocument,
+  PromptEdit,
+  PromptEditResult,
+  SessionAction,
+  SessionActionName,
+  EditModelCall,
+} from "./prompt-session.js";
+
+export type { DiffLine, DiffKind } from "./text-diff.js";
+
 export type { DiscoveredRelease, OutputPathValues } from "./output-path.js";
 
-export type { ReleaseFormat, ReleaseBlock, ReleaseSection } from "./release-document.js";
+export type {
+  ReleaseFormat,
+  ReleaseBlock,
+  ReleaseSection,
+  ReleaseContentRange,
+  DedupeResult,
+} from "./release-document.js";
 
 export type { OutputIndexRelease, UpdateOutputIndexesParams } from "./output-index.js";
 

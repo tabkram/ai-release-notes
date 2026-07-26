@@ -86,6 +86,72 @@ export function joinReleaseDocuments(documents: string[], format: ReleaseFormat)
     .join(format === "html" ? "\n<hr>\n" : "\n\n---\n\n");
 }
 
+/** A release note with its repeated lines dropped, and what was dropped. */
+export interface DedupeResult {
+  content: string;
+  /** The lines that were dropped, as they were written, in reading order. */
+  removed: string[];
+}
+
+/**
+ * Drop the lines a release note lists more than once.
+ *
+ * A note covering several releases, or one merged by hand, repeats the same
+ * bullet under two sections. The first one stays where the reader meets it and
+ * the later ones go, whatever markup or wording carries them — the same
+ * comparison merging uses, so the two agree on what a repeated line is.
+ *
+ * Only listed lines are compared: a paragraph, a rule or a metadata line can be
+ * repeated by design, and a title block is built from exactly those. A section
+ * left with nothing to say goes with its lines.
+ */
+export function dedupeReleaseDocument(content: string, format: ReleaseFormat): DedupeResult {
+  const removed: string[] = [];
+  const deduped = dedupeSection(parseReleaseDocument(content, format), new Set<string>(), removed);
+  return {
+    content: removed.length === 0 ? content : serializeReleaseDocument(deduped, format),
+    removed,
+  };
+}
+
+function dedupeSection(
+  section: ReleaseSection,
+  seen: Set<string>,
+  removed: string[]
+): ReleaseSection {
+  const blocks: ReleaseBlock[] = [];
+  for (const block of section.blocks) {
+    if (block.kind !== "list") {
+      blocks.push({ ...block });
+      continue;
+    }
+
+    const items = (block.items || []).filter((item) => {
+      const key = comparisonKey(item);
+      // A line with no letters or digits of its own carries no wording to
+      // repeat, so it is never taken for a duplicate of another one.
+      if (!key) return true;
+      if (seen.has(key)) {
+        removed.push(item);
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+    if (items.length > 0) blocks.push({ ...block, items, content: items.join("\n") });
+  }
+
+  return {
+    level: section.level,
+    heading: section.heading,
+    blocks,
+    children: section.children
+      .map((child) => dedupeSection(child, seen, removed))
+      .filter((child) => child.blocks.length > 0 || child.children.length > 0),
+  };
+}
+
 /**
  * Join two release notes, the later one folded into the earlier.
  *
@@ -443,25 +509,79 @@ function serializeHtml(section: ReleaseSection): string {
 // Finding a release note inside a rendered page
 // ─────────────────────────────────────────
 
+/** Where a release note sits inside the page it was written into. */
+export interface ReleaseContentRange {
+  start: number;
+  end: number;
+  /** What located it: the template's own wording, or the page's own element. */
+  via: "template" | "element";
+}
+
 /**
- * Read the release note out of a rendered HTML page.
+ * Find the release note inside a rendered HTML page.
  *
  * A page carries no mark of ours saying where the note begins: the template
  * that produced it already says what surrounds it, and failing that the page's
  * own `main` or `article` does. When neither answers — a template of yours this
- * has never seen — nothing is returned, and the page is promoted as it stands
- * rather than cut at a guessed place.
+ * has never seen — nothing is returned, and the page is left whole rather than
+ * cut at a guessed place.
  */
-export function extractReleaseContent(page: string, template?: string): string | undefined {
+export function releaseContentRange(
+  page: string,
+  template?: string
+): ReleaseContentRange | undefined {
   const anchored = template ? betweenTemplateAnchors(page, template) : undefined;
-  if (anchored !== undefined) return anchored.trim();
+  if (anchored) return anchored;
 
   for (const element of ["main", "article"] as const) {
     const match = new RegExp(`<${element}\\b[^>]*>([\\s\\S]*)</${element}>`, "i").exec(page);
-    if (match) return match[1].replace(/<footer\b[^>]*>[\s\S]*?<\/footer>/gi, "").trim();
+    if (!match) continue;
+    // The opening tag is whatever the match holds beyond the content and the
+    // closing tag, so an element carrying attributes is measured, not assumed.
+    const start = match.index + match[0].length - match[1].length - element.length - "</>".length;
+    return { start, end: start + match[1].length, via: "element" };
   }
 
   return undefined;
+}
+
+/** Read the release note out of a rendered HTML page. */
+export function extractReleaseContent(page: string, template?: string): string | undefined {
+  const range = releaseContentRange(page, template);
+  if (!range) return undefined;
+
+  const content = page.slice(range.start, range.end);
+  // An element found on the page may hold the page's own footer as well as the
+  // note; a template says exactly where the note ends, so nothing is stripped.
+  return range.via === "element"
+    ? content.replace(/<footer\b[^>]*>[\s\S]*?<\/footer>/gi, "").trim()
+    : content.trim();
+}
+
+/**
+ * Put a revised release note back on the page it was read out of.
+ *
+ * Only the note is replaced, so the page keeps its own head, styles, footer and
+ * every value the template filled in when it was generated. A page whose note
+ * cannot be told apart from the page's own wording is not rewritten at all:
+ * nothing is returned, and the caller reports the file as one to edit by hand.
+ */
+export function replaceReleaseContent(
+  page: string,
+  revised: string,
+  template?: string
+): string | undefined {
+  const range = releaseContentRange(page, template);
+  if (!range) return undefined;
+
+  // Reached the note through the page's own element, and the footer sits inside
+  // it: the footer is the page's wording rather than the release's, and a
+  // revision is not asked to touch it.
+  if (range.via === "element" && /<footer\b/i.test(page.slice(range.start, range.end))) {
+    return undefined;
+  }
+
+  return `${page.slice(0, range.start)}\n${revised.trim()}\n${page.slice(range.end)}`;
 }
 
 /**
@@ -472,7 +592,10 @@ export function extractReleaseContent(page: string, template?: string): string |
  * that appears more than once in the page is no landmark, and the page is left
  * to the next reader rather than cut at the wrong place.
  */
-function betweenTemplateAnchors(page: string, template: string): string | undefined {
+function betweenTemplateAnchors(
+  page: string,
+  template: string
+): ReleaseContentRange | undefined {
   const slot = template.indexOf("{{content}}");
   if (slot < 0) return undefined;
 
@@ -483,7 +606,7 @@ function betweenTemplateAnchors(page: string, template: string): string | undefi
   const from = page.indexOf(opening);
   const to = page.indexOf(closing, from + opening.length);
   if (to < 0) return undefined;
-  return page.slice(from + opening.length, to);
+  return { start: from + opening.length, end: to, via: "template" };
 }
 
 function isLandmark(page: string, anchor: string): boolean {

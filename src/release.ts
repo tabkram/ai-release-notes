@@ -479,6 +479,88 @@ function isSafeUrl(url: string): boolean {
   return !scheme || ["http", "https", "mailto"].includes(scheme[1]);
 }
 
+/**
+ * The markup a release note is allowed to be made of, and what may carry it.
+ *
+ * Every element here is one `markdownToHtml` itself produces, so a note that
+ * survives this sanitizer looks like a generated one. Anything else is markup
+ * the note has no use for.
+ */
+const RELEASE_HTML_ELEMENTS: Record<string, string[]> = {
+  p: [], br: [], hr: [], div: [], span: [], section: [], article: [],
+  h1: [], h2: [], h3: [], h4: [], h5: [], h6: [],
+  ul: [], ol: ["start", "type"], li: ["value"],
+  strong: [], b: [], em: [], i: [], u: [], s: [], del: [], ins: [], mark: [],
+  small: [], sub: [], sup: [], abbr: [], q: [],
+  code: [], pre: [], blockquote: [], figure: [], figcaption: [],
+  a: ["href"],
+  table: [], thead: [], tbody: [], tfoot: [], tr: [],
+  th: ["colspan", "rowspan", "scope"], td: ["colspan", "rowspan"],
+  dl: [], dt: [], dd: [],
+};
+
+/** Attributes any allowed element may carry: they name and label, nothing more. */
+const RELEASE_HTML_GLOBAL_ATTRIBUTES = ["class", "id", "lang", "dir", "title"];
+
+/** Elements whose content is markup the page runs or renders, not words to read. */
+const EXECUTABLE_HTML_ELEMENTS = /<(script|style|iframe|object|embed|template|noscript|svg|math)\b[\s\S]*?<\/\1\s*>/gi;
+
+const HTML_TAG = /<(\/?)([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g;
+const HTML_ATTRIBUTE = /([a-zA-Z_:][-\w:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'`=<>]+)))?/g;
+
+/**
+ * Reduce HTML a model wrote to the markup a release note is made of.
+ *
+ * Generated notes reach a page as escaped Markdown, so nothing the model writes
+ * is ever placed as markup — except when a note that is already a page is
+ * revised, and the revision comes back as HTML. That answer is model output
+ * shaped by changelog text nobody reviewed, so it is reduced to an allowed set
+ * of elements and attributes before it goes back on the page.
+ *
+ * An element that is not allowed loses its tags and keeps its words: dropping
+ * the sentence with the markup would lose part of the release note.
+ */
+export function sanitizeReleaseHtml(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(EXECUTABLE_HTML_ELEMENTS, "")
+    .replace(HTML_TAG, (tag, closing: string, name: string, attributes: string) => {
+      const element = name.toLowerCase();
+      const allowed = RELEASE_HTML_ELEMENTS[element];
+      if (!allowed) return "";
+      if (closing) return `</${element}>`;
+
+      const kept = sanitizeHtmlAttributes(attributes, allowed);
+      return `<${[element, ...kept].join(" ")}>`;
+    });
+}
+
+function sanitizeHtmlAttributes(attributes: string, allowed: string[]): string[] {
+  const kept: string[] = [];
+
+  HTML_ATTRIBUTE.lastIndex = 0;
+  for (
+    let match = HTML_ATTRIBUTE.exec(attributes);
+    match;
+    match = HTML_ATTRIBUTE.exec(attributes)
+  ) {
+    const name = match[1].toLowerCase();
+    if (!allowed.includes(name) && !RELEASE_HTML_GLOBAL_ATTRIBUTES.includes(name)) continue;
+
+    const value = match[2] ?? match[3] ?? match[4];
+    if (value === undefined) {
+      kept.push(name);
+      continue;
+    }
+    // A link target decides what a click does, so it is held to the same
+    // schemes a generated note's links are.
+    if (name === "href" && !isSafeUrl(value)) continue;
+    kept.push(`${name}="${escapeHtml(value)}"`);
+  }
+
+  return kept;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")

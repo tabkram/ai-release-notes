@@ -58,6 +58,32 @@ so the files under `output.saveTo` are trusted to the same degree as the rest of
 the repository they live in. A release note edited by hand after generation is
 promoted with those edits, markup included.
 
+### Revised releases
+
+`prompt` sends a release note this tool already wrote back to a provider, with
+the change asked for. Two things travel separately there.
+
+The request is typed by whoever is running the command, so it is trusted and is
+meant to be acted on. The release note is not: it was written from changelog
+text nobody reviewed, so it travels in a labelled data block like a changelog
+does, under the same scope guard, and any text inside it imitating a block
+delimiter is rewritten so it cannot close the block early.
+
+What comes back is untrusted like any other model output. For a Markdown output
+it is written as text. For an HTML output it is markup going onto a published
+page, so it is first reduced to the elements and attributes a release note is
+made of: scripts, styles, event handlers, and link schemes other than `http`,
+`https` and `mailto` do not survive. Only the note itself is replaced — the
+page keeps its own head, styles and footer — and a page whose note cannot be
+told apart from the page around it is reported and left alone rather than
+rewritten at a guessed place.
+
+The message that decides what a request meant is read by a separate call that
+is shown the message and the state of the session, never a release note.
+
+Nothing is written until it is saved, and every request reports the lines it
+changed, so a revision is reviewed before it reaches a file.
+
 ### Spend
 
 `git.maxCommits` (default 200) bounds how many commits one run sends to a paid
