@@ -3,7 +3,8 @@
  */
 
 import { loadConfig, resolveProviderAlias } from "./config.js";
-import { getChangelog, getTagCreationDate, parseCommits } from "./git.js";
+import { getChangelog, parseCommits } from "./git.js";
+import { resolveReleaseDate } from "./release-date.js";
 import { callLLM } from "./llm.js";
 import {
   buildSystemPrompt,
@@ -124,6 +125,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   // ── Build prompts ──
   const languages = config.prompt?.languages?.length ? config.prompt.languages : ["en"];
   const primaryLanguage = languages[0];
+  const onlyLanguage = resolveRequestedLanguage(languages, options.language);
   const systemPrompt = await buildSystemPrompt(config.prompt);
   const date = await resolveReleaseDate(options, options.toVersion);
 
@@ -191,6 +193,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
     const translationInstructions = await resolveInstructions(config.prompt?.instructions);
     for (const language of languages.slice(1)) {
+      // Asking for one language still writes the first one: it is what the
+      // others are translated from, so it is generated and then left out.
+      if (onlyLanguage && language !== onlyLanguage) continue;
       const translatedRelease = await callLLM(
         providerName,
         providerConfig,
@@ -215,7 +220,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const localized = [{
     language: primaryLanguage,
     markdown: primaryMarkdown,
-  }, ...translatedReleases];
+  }, ...translatedReleases].filter((release) => !onlyLanguage || release.language === onlyLanguage);
   const markdown = localized
     .map((release, index) => index === 0
       ? release.markdown
@@ -242,7 +247,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     ? (Array.isArray(config.output) ? config.output : [config.output])
     : [];
   const needsHtml = outputConfigs.some((output) => output.format === "html");
-  const outputFormat = options.format || outputConfigs[0]?.format || "md";
+  const outputFormat = options.format || outputConfigs[0]?.format || "markdown";
   if (outputFormat === "html" || needsHtml) {
     const htmlOutput = outputConfigs.find((output) => output.format === "html");
     const template = await loadReleaseNoteTemplate(options.template || htmlOutput?.template);
@@ -262,6 +267,27 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   usage.durationMs = Date.now() - startedAt;
 
   return result;
+}
+
+/**
+ * The one language a run was narrowed to, if it was narrowed at all.
+ *
+ * A language that is not configured is a mistake worth stopping on rather than
+ * a run that quietly writes nothing: the configured ones are named back.
+ */
+function resolveRequestedLanguage(configured: string[], requested?: string): string | undefined {
+  if (!requested) return undefined;
+
+  const language = configured.find(
+    (candidate) => candidate.toLowerCase() === requested.trim().toLowerCase()
+  );
+  if (!language) {
+    throw new Error(
+      `Language "${requested}" is not configured. ` +
+      `Use one of prompt.languages: ${configured.join(", ")}.`
+    );
+  }
+  return language;
 }
 
 /** Load a custom release-note template, falling back to the bundled HTML template. */
@@ -286,57 +312,6 @@ export async function generateFromChangelog(
   options: Omit<GenerateOptions, "changelog" | "changelogFile">
 ): Promise<GenerateResult> {
   return generate({ ...options, changelog });
-}
-
-function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", {
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
-}
-
-async function resolveReleaseDate(options: GenerateOptions, toVersion: string): Promise<string> {
-  if (!options.releaseDate) {
-    return options.date || formatDate(new Date());
-  }
-
-  const value = options.releaseDate.trim();
-  if (value.toLowerCase() === "now") {
-    return formatDate(new Date());
-  }
-  if (value.toLowerCase() === "tag") {
-    const tagDate = await getTagCreationDate(toVersion);
-    if (!tagDate) {
-      throw new Error(
-        `Could not find a creation date for tag "${toVersion}". ` +
-        `Use --release-date now or an ISO date such as 2026-07-20.`
-      );
-    }
-    return formatDate(tagDate);
-  }
-
-  const specificDate = parseSpecificDate(value);
-  if (!specificDate) {
-    throw new Error(
-      `Invalid release date "${value}". Use now, tag, or an ISO date such as 2026-07-20.`
-    );
-  }
-  return formatDate(specificDate);
-}
-
-function parseSpecificDate(value: string): Date | null {
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (dateOnly) {
-    const [, year, month, day] = dateOnly;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
-    return date.getFullYear() === Number(year) && date.getMonth() === Number(month) - 1 && date.getDate() === Number(day)
-      ? date
-      : null;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function addUsage(

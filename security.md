@@ -49,6 +49,51 @@ Release notes are model output, so raw HTML in them is escaped and link targets
 are restricted to `http`, `https`, `mailto`, and relative paths. Scripting
 schemes such as `javascript:` are rendered as plain text.
 
+### Promoted releases
+
+`promote` moves release files this tool already wrote from one environment to
+the next. Their markup was escaped when it was generated, and is placed on the
+promoted page as it stands rather than escaped a second time — so the files
+under `output.saveTo` are trusted to the same degree as the rest of the
+repository they live in. A release note edited by hand after generation is
+promoted with those edits, markup included.
+
+Promoting one release calls no provider. Merging several of them into one note
+reaches a provider once, and only for the opening that note carries: the
+headings, dates and summaries of the releases being merged are sent, in a
+labelled data block, and the sections are not. What comes back is sanitized the
+way any model output is before it reaches a page, and an answer carrying
+sections of its own is refused rather than placed — the merged sections are the
+reviewed wording promoting exists to preserve, and nothing the model returns can
+reach them. With no provider configured, the call is never made and the newest
+release's own opening stands for the range.
+
+### Revised releases
+
+`prompt` sends a release note this tool already wrote back to a provider, with
+the change asked for. Two things travel separately there.
+
+The request is typed by whoever is running the command, so it is trusted and is
+meant to be acted on. The release note is not: it was written from changelog
+text nobody reviewed, so it travels in a labelled data block like a changelog
+does, under the same scope guard, and any text inside it imitating a block
+delimiter is rewritten so it cannot close the block early.
+
+What comes back is untrusted like any other model output. For a Markdown output
+it is written as text. For an HTML output it is markup going onto a published
+page, so it is first reduced to the elements and attributes a release note is
+made of: scripts, styles, event handlers, and link schemes other than `http`,
+`https` and `mailto` do not survive. Only the note itself is replaced — the
+page keeps its own head, styles and footer — and a page whose note cannot be
+told apart from the page around it is reported and left alone rather than
+rewritten at a guessed place.
+
+The message that decides what a request meant is read by a separate call that
+is shown the message and the state of the session, never a release note.
+
+Nothing is written until it is saved, and every request reports the lines it
+changed, so a revision is reviewed before it reaches a file.
+
 ### Spend
 
 `git.maxCommits` (default 200) bounds how many commits one run sends to a paid

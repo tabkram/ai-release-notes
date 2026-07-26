@@ -4,6 +4,8 @@
 
 import { z } from "zod";
 
+import type { ReleaseFormat } from "./release-document.js";
+
 // ─────────────────────────────────────────
 // Commit types
 // ─────────────────────────────────────────
@@ -115,6 +117,9 @@ export const OutputIndexesConfigSchema = z.union([
   z.array(OutputIndexConfigSchema).min(1),
 ]);
 
+export type OutputConfig = z.infer<typeof OutputConfigSchema>;
+export type OutputIndexConfig = z.infer<typeof OutputIndexConfigSchema>;
+
 export const ReleaseNotesConfigSchema = z.object({
   projectName: z.string().min(1).optional(),
   provider: z.string().default("openai"),
@@ -147,12 +152,12 @@ export interface GenerateOptions {
   toVersion: string;
   /** Environment name: PROD, QUA, DEV, etc. */
   environment: string;
-  /** Explicit display date. Prefer releaseDate for a date selector. */
+  /** Release date: "now" (default), "tag", or an ISO date such as "2026-07-20". */
   date?: string;
-  /** Release date selector: "now", "tag", or an ISO date such as "2026-07-20". */
-  releaseDate?: string;
   /** Override LLM provider */
   provider?: ProviderName | string;
+  /** Write one configured language only, instead of every one of them. */
+  language?: string;
   /** Path to config file */
   configPath?: string;
   /** Raw changelog text (skip git extraction) */
@@ -165,10 +170,10 @@ export interface GenerateOptions {
   clipboard?: boolean;
   /** Output file path */
   outputPath?: string;
-  /** Output folder (default: current dir) */
-  outputDir?: string;
-  /** Output format: md or html */
-  format?: "md" | "html";
+  /** Write the release into this folder (default: current dir) */
+  toDir?: string;
+  /** Output format, as `output.format` names it. */
+  format?: ReleaseFormat;
   /** Template file path (Handlebars/Mustache) */
   template?: string;
   /**

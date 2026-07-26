@@ -45,6 +45,9 @@ prompt:
 # Output settings
 # ─────────────────────────────────────────
 
+# A name carrying {from} and {to} gives each release its own file, which is what
+# lets `ai-release-notes promote --from-env QUA --to-env PROD` find a release
+# already written and move its wording to the next environment.
 output:
   - format: markdown
     saveTo: ./releases/RELEASE_NOTES_{env}_{from}_{to}.md

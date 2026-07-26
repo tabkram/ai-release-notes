@@ -7,37 +7,35 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
-import {
-  applyOutputIndexLanguageSwitcher,
-  hasOutputIndexLanguageSwitcher,
-  markdownToHtml,
-  outputIndexReleaseId,
-  readLegacyOutputIndexEntries,
-  readOutputIndexReleaseRecords,
-  readOutputIndexReleasesRegion,
-  renderOutputIndexLanguageSwitcher,
-  renderOutputIndexReleases,
-  replaceOutputIndexReleases,
-  upsertOutputIndexReleaseRecord,
-  RELEASES_MARKER,
-  RELEASES_END_MARKER,
-  type OutputIndexEntryTemplate,
-  type OutputIndexLanguageLink,
-  type OutputIndexReleaseRecord,
-} from "../release.js";
+import { RELEASES_MARKER } from "../release.js";
 import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
-import { discoverOutputIndexLanguages } from "../output-index.js";
-import { FIRST_RELEASE, getLatestTag, isFirstRelease } from "../git.js";
+import {
+  ENTRY_TEMPLATE_SEPARATOR,
+  unwrapHtmlDocumentCodeFence,
+  updateOutputIndexes,
+} from "../output-index.js";
+import { formatOutputPath, isReleaseSpecificPath } from "../output-path.js";
+import { promote, PromotionError } from "../promote.js";
+import { PromptError, PromptSession, type PromptEditResult } from "../prompt-session.js";
+import { changedLines } from "../text-diff.js";
+import type { ReleaseFormat } from "../release-document.js";
+import { FIRST_RELEASE, getLatestTag } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { resolve, join, dirname, relative } from "path";
+import { resolve, join, dirname, basename, relative } from "path";
 import clipboardy from "clipboardy";
 import ora from "ora";
-import type { GenerateResult, PromptSource, ProviderConfig, ProviderName, ReleaseNotesConfig } from "../types.js";
+import type {
+  GenerateResult,
+  OutputIndexConfig,
+  PromptSource,
+  ProviderConfig,
+  ProviderName,
+  ReleaseNotesConfig,
+} from "../types.js";
 import { AI_RELEASE_NOTES_VERSION } from "../version.js";
 
 const CLI_VERSION = AI_RELEASE_NOTES_VERSION;
-const LANGUAGE_PATH_PLACEHOLDER = "aireleasenoteslanguageplaceholder";
 const program = new Command();
 
 type OutputTarget = {
@@ -54,27 +52,24 @@ type OutputTarget = {
   ownedByRelease?: boolean;
 };
 
-type OutputIndexTarget = {
-  path: string;
-  groupId: number;
-  language?: string;
-  format: "markdown" | "html";
-  templatePath?: string;
-  entryTemplatePath?: string;
-  templateLanguage: string;
-};
-
-type OutputIndexLanguageTarget = Pick<
-  OutputIndexTarget,
-  "path" | "groupId" | "format" | "templatePath"
-> & { language: string };
-
 function printStatus(stdout: boolean, message: string): void {
   if (stdout) {
     console.error(message);
     return;
   }
   console.log(message);
+}
+
+/**
+ * The output format, under the one name the rest of the tool knows it by.
+ *
+ * `output.format` in the configuration has always said `markdown`, and so does
+ * every type here, so `md` on the command line is read as the same thing rather
+ * than being a second word for it.
+ */
+function releaseFormat(value?: string): ReleaseFormat | undefined {
+  if (!value) return undefined;
+  return value === "md" ? "markdown" : (value as ReleaseFormat);
 }
 
 /** Where a prompt comes from, for the verbose report. */
@@ -178,7 +173,6 @@ program
 // ── generate ──
 program
   .command("generate")
-  .alias("gen")
   .description("Generate release notes from git tags")
   .option(
     "--from <version>",
@@ -187,15 +181,15 @@ program
   )
   .option("--to <version>", "Current version tag (e.g. v1.1.0)")
   .requiredOption("--env <environment>", "Environment: PROD, STAGING, DEV...")
-  .option("--release-date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
-  .option("--date <value>", 'Alias for --release-date ("now", "tag", or an ISO date)')
+  .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
+  .option("--lang <language>", "Write one configured language only")
   .option("--config <path>", "Path to config file")
   .option("--output <path>", "Output file path (override config)")
-  .option("--output-dir <dir>", "Output directory (default: current dir)")
-  .option("--format <format>", "Output format: md or html")
+  .option("--to-dir <dir>", "Write the release into this folder (default: current dir)")
+  .option("--format <format>", "Output format: markdown or html")
   .option("--template <path>", "Path to custom template file")
-  .option("--changelog <path>", "Path to a file containing raw changelog (skip git)")
+  .option("--changelog-file <path>", "Path to a file containing raw changelog (skip git)")
   .option("--context <paths...>", "Context files or directories (specs, models, etc.)")
   .option("--dry-run", "Show prompts without calling LLM")
   .option("-v, --verbose", "Show applied instructions and generation steps")
@@ -206,6 +200,7 @@ program
     let config: ReleaseNotesConfig | undefined;
     let summaryPrinted = false;
     try {
+      const format = releaseFormat(opts.format);
       // Start at the repository's first commit unless an explicit tag/ref is provided.
       const fromVersion = opts.from;
       let toVersion = opts.to;
@@ -227,15 +222,16 @@ program
         fromVersion,
         toVersion,
         environment: opts.env,
-        releaseDate: opts.releaseDate || opts.date,
+        date: opts.date,
         provider: opts.with,
+        language: opts.lang,
         configPath: opts.config,
-        changelogFile: opts.changelog,
+        changelogFile: opts.changelogFile,
         dryRun: opts.dryRun,
         clipboard: opts.clipboard,
         outputPath: opts.output,
-        outputDir: opts.outputDir,
-        format: opts.format,
+        toDir: opts.toDir,
+        format,
         template: opts.template,
         context: opts.context,
       });
@@ -253,12 +249,12 @@ program
 
       // Determine output path
       let outputTargets: OutputTarget[] = !opts.stdout && opts.output
-        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format, ownedByRelease: true }]
+        ? [{ path: opts.output, markdown: generatedResult.markdown, html: generatedResult.html, format, ownedByRelease: true }]
         : [];
-      if (!opts.stdout && outputTargets.length === 0 && opts.outputDir) {
-        const ext = opts.format === "html" ? "html" : "md";
-        const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${ext}`;
-        outputTargets = [{ path: join(resolve(opts.outputDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format: opts.format, ownedByRelease: true }];
+      if (!opts.stdout && outputTargets.length === 0 && opts.toDir) {
+        const extension = format === "html" ? "html" : "md";
+        const filename = `RELEASE_NOTES_${toVersion.replace(/^v/, "")}.${extension}`;
+        outputTargets = [{ path: join(resolve(opts.toDir), filename), markdown: generatedResult.markdown, html: generatedResult.html, format, ownedByRelease: true }];
       }
 
       if (!opts.stdout && outputTargets.length === 0) {
@@ -267,11 +263,14 @@ program
           outputTargets = outputConfigs.flatMap((output) => {
             if (!output.saveTo) return [];
             const saveTo = Array.isArray(output.saveTo) ? output.saveTo : [output.saveTo];
+            // A release generated without --to is saved under the name the
+            // config asks for, which is not the tag it was detected as.
+            const versions = { fromVersion: opts.from || FIRST_RELEASE, toVersion: opts.to || "end" };
             return saveTo.flatMap((path) => {
               const ownedByRelease = isReleaseSpecificPath(path);
               return path.includes("{lang}")
                 ? generatedResult.localized.map((release) => ({
-                    path: getOutputPath(path, opts.env, release.language, opts.from, opts.to),
+                    path: formatOutputPath(path, { ...versions, environment: opts.env, language: release.language }),
                     markdown: release.markdown,
                     html: release.html,
                     format: output.format,
@@ -279,7 +278,7 @@ program
                     ownedByRelease,
                   }))
                 : [{
-                    path: getOutputPath(path, opts.env, undefined, opts.from, opts.to),
+                    path: formatOutputPath(path, { ...versions, environment: opts.env }),
                     markdown: generatedResult.markdown,
                     html: generatedResult.html,
                     format: output.format,
@@ -287,77 +286,6 @@ program
                   }];
             });
           });
-        }
-      }
-
-      const outputIndexConfigs = loadedConfig.outputIndex
-        ? (Array.isArray(loadedConfig.outputIndex) ? loadedConfig.outputIndex : [loadedConfig.outputIndex])
-        : [];
-      // An index template is written in the language the release is generated
-      // in, so prompt.languages already answers this.
-      const primaryLanguage = generatedResult.localized[0]?.language ?? "en";
-      const outputIndexTargets: OutputIndexTarget[] = outputIndexConfigs.flatMap((outputIndex, groupId) =>
-        outputIndex.saveTo.includes("{lang}")
-          ? generatedResult.localized.map((release) => ({
-              path: resolve(getOutputPath(outputIndex.saveTo, opts.env, release.language, opts.from, opts.to)),
-              groupId,
-              language: release.language,
-              format: outputIndex.format,
-              templatePath: outputIndex.template,
-              entryTemplatePath: outputIndex.entryTemplate,
-              templateLanguage: primaryLanguage,
-            }))
-          : [{
-              path: resolve(getOutputPath(outputIndex.saveTo, opts.env, undefined, opts.from, opts.to)),
-              groupId,
-              format: outputIndex.format,
-              templatePath: outputIndex.template,
-              entryTemplatePath: outputIndex.entryTemplate,
-              templateLanguage: primaryLanguage,
-            }]
-      );
-      if (outputIndexTargets.some((index) => outputTargets.some((target) => resolve(target.path) === index.path))) {
-        throw new Error("outputIndex.saveTo must be different from every output.saveTo path");
-      }
-      const duplicateIndexPath = outputIndexTargets.find((target, index) =>
-        outputIndexTargets.findIndex(
-          (candidate) => candidate.path.toLowerCase() === target.path.toLowerCase()
-        ) !== index
-      );
-      if (duplicateIndexPath) {
-        throw new Error(
-          `outputIndex.saveTo resolves more than once to ${duplicateIndexPath.path}. ` +
-          `Use distinct paths and language values.`
-        );
-      }
-      const outputIndexLanguageTargets: OutputIndexLanguageTarget[] = outputIndexTargets
-        .flatMap((target) => target.language ? [{ ...target, language: target.language }] : []);
-      for (const [groupId, outputIndex] of outputIndexConfigs.entries()) {
-        if (!outputIndex.saveTo.includes("{lang}")) continue;
-        const patternPath = resolve(getOutputPath(
-          outputIndex.saveTo,
-          opts.env,
-          LANGUAGE_PATH_PLACEHOLDER,
-          opts.from,
-          opts.to
-        ));
-        const discovered = await discoverOutputIndexLanguages(
-          patternPath,
-          LANGUAGE_PATH_PLACEHOLDER
-        );
-        for (const existingIndex of discovered) {
-          const alreadyAvailable = outputIndexLanguageTargets.some((target) =>
-            target.groupId === groupId &&
-            target.path.toLowerCase() === existingIndex.path.toLowerCase()
-          );
-          if (!alreadyAvailable) {
-            outputIndexLanguageTargets.push({
-              ...existingIndex,
-              groupId,
-              format: outputIndex.format,
-              templatePath: outputIndex.template,
-            });
-          }
         }
       }
 
@@ -383,75 +311,36 @@ program
         }
       }
 
-      if (outputIndexTargets.length > 0 && outputTargets.length > 0) {
-        for (const index of outputIndexTargets) {
-          await mkdir(dirname(index.path), { recursive: true });
-          const releasePaths = getReleasePathsForIndex(index, outputTargets);
-          const languageLinks = getOutputIndexLanguageLinks(index, outputIndexLanguageTargets);
-          const outputIndexContent = await createOrUpdateOutputIndex({
-            outputPath: index.path,
-            format: index.format,
-            templatePath: index.templatePath,
-            entryTemplatePath: index.entryTemplatePath,
-            translateTemplate: !opts.dryRun && shouldTranslateTemplate(index.templateLanguage, index.language)
-              ? async (template) => {
-                  const translated = await translateOutputIndexTemplate(
-                    template,
-                    index.language!,
-                    generatedResult.metadata.provider as ProviderName,
-                    loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
-                  );
-                  addTemplateUsage(generatedResult.metadata.usage, translated.usage);
-                  return translated.text;
-              }
-              : undefined,
-            projectName: loadedConfig.projectName,
-            environment: opts.env,
-            language: index.language,
-            fromVersion,
-            toVersion,
-            date: generatedResult.metadata.date,
-            releasePaths,
-            languageLinks,
-          });
-          await writeFile(index.path, outputIndexContent, "utf-8");
-          console.log(chalk.green("📚 Updated output index " + index.path));
-        }
-
-        const currentIndexPaths = new Set(
-          outputIndexTargets.map((target) => target.path.toLowerCase())
-        );
-        for (const existingIndex of outputIndexLanguageTargets) {
-          if (currentIndexPaths.has(existingIndex.path.toLowerCase())) continue;
-
-          const existing = await readFile(existingIndex.path, "utf-8");
-          const languageLinks = getOutputIndexLanguageLinks(
-            existingIndex,
-            outputIndexLanguageTargets
-          );
-          const languageSwitcher = renderOutputIndexLanguageSwitcher(
-            existingIndex.format,
-            languageLinks
-          );
-          const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(existing);
-          let updated = applyOutputIndexLanguageSwitcher(existing, languageSwitcher);
-          if (
-            !hasLanguageSwitcher &&
-            !existingIndex.templatePath &&
-            languageLinks.length > 1 &&
-            existing.includes(RELEASES_MARKER)
-          ) {
-            updated = existing.replace(
-              RELEASES_MARKER,
-              `${languageSwitcher}\n\n${RELEASES_MARKER}`
-            );
-          }
-          if (updated !== existing) {
-            await writeFile(existingIndex.path, updated, "utf-8");
-            console.log(chalk.green("🌐 Refreshed languages in " + existingIndex.path));
-          }
-        }
-      }
+      await updateOutputIndexes({
+        outputIndexes: outputIndexConfigs(loadedConfig),
+        releases: outputTargets,
+        projectName: loadedConfig.projectName,
+        environment: opts.env,
+        fromVersion,
+        toVersion,
+        // A release generated without --to is saved under the name the config
+        // asks for, which is not the tag it was detected as.
+        pathFromVersion: opts.from || FIRST_RELEASE,
+        pathToVersion: opts.to || "end",
+        date: generatedResult.metadata.date,
+        languages: generatedResult.localized.map((release) => release.language),
+        // An index template is written in the language the release is generated
+        // in, so prompt.languages already answers this.
+        primaryLanguage: generatedResult.localized[0]?.language ?? "en",
+        translateTemplate: opts.dryRun
+          ? undefined
+          : async (template, language) => {
+              const translated = await translateOutputIndexTemplate(
+                template,
+                language,
+                generatedResult.metadata.provider as ProviderName,
+                loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
+              );
+              addTemplateUsage(generatedResult.metadata.usage, translated.usage);
+              return translated.text;
+            },
+        onUpdated: printOutputIndexUpdate,
+      });
 
       // Clipboard
       if (opts.clipboard) {
@@ -472,6 +361,193 @@ program
         ? (opts.with ? resolveProviderAlias(opts.with) : config.provider as ProviderName)
         : undefined;
       console.error(chalk.red("\n❌ Error:"), formatGenerationError(err, partialResult, config, providerOverride));
+      process.exit(1);
+    }
+  });
+
+// ── promote ──
+program
+  .command("promote")
+  .description("Move release notes from one environment to the next, reusing their wording")
+  .option("--from-env <environment>", "Environment to promote from: QUA, STAGING... (default: --from-dir's name)")
+  .option("--to-env <environment>", "Environment to promote to: PROD, PREPROD... (default: --to-dir's name)")
+  .option("--from <version>", "Start of the range (default: where the target environment is)")
+  .option("--to <version>", "End of the range (default: the newest release in the source)")
+  .option("--from-dir <dir>", "Read the source releases from this folder")
+  .option("--to-dir <dir>", "Write the promoted releases to this folder")
+  .option("--pattern <pattern>", "File name inside those folders, with {from} and {to}")
+  .option("--with <provider>", "LLM provider used to write the opening of a merged range")
+  .option("--lang <language>", "Promote one language only")
+  .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
+  .option("--config <path>", "Path to config file")
+  .option("--dry-run", "Show what would be promoted without writing anything")
+  .option("-v, --verbose", "Show what was promoted, release by release")
+  .option("--stdout", "Write the promoted release notes to the terminal without saving files")
+  .action(async (opts) => {
+    try {
+      // A layout that keeps each environment in a folder has already named
+      // them, so the folder answers for the environment when nothing else does.
+      const fromEnvironment = opts.fromEnv || folderName(opts.fromDir);
+      const toEnvironment = opts.toEnv || folderName(opts.toDir);
+      if (!fromEnvironment || !toEnvironment) {
+        throw new PromotionError(
+          "Promoting needs both environments: pass --from-env and --to-env, " +
+          "or --from-dir and --to-dir to take their names from the folders."
+        );
+      }
+
+      const result = await promote({
+        fromEnvironment,
+        toEnvironment,
+        fromVersion: opts.from,
+        toVersion: opts.to,
+        fromDir: opts.fromDir,
+        toDir: opts.toDir,
+        pattern: opts.pattern,
+        provider: opts.with,
+        language: opts.lang,
+        date: opts.date,
+        configPath: opts.config,
+      });
+
+      const { fromVersion, toVersion } = result.metadata;
+      if (result.plan.segments.length === 0) {
+        console.log(chalk.yellow(
+          `✅ ${toEnvironment} is already at ${toVersion}. Nothing to promote from ${fromEnvironment}.`
+        ));
+        return;
+      }
+
+      printStatus(opts.stdout, chalk.blue(
+        `🚀 Promoting ${fromEnvironment} → ${toEnvironment}: ${fromVersion} → ${toVersion}`
+      ));
+      for (const segment of result.plan.segments) {
+        printStatus(opts.stdout, chalk.gray(`   ${segment.fromVersion} → ${segment.toVersion}`));
+      }
+      for (const skipped of result.metadata.skipped) {
+        printStatus(opts.stdout, chalk.gray(
+          `   Skipped ${skipped}: it holds every release, not one per file.`
+        ));
+      }
+      if (result.plan.segments.length > 1) {
+        printStatus(opts.stdout, chalk.gray("   Sections merged word for word."));
+        // Falling back is not wrong — the newest release's opening is a true
+        // one — but it is narrower than the range, so it is said out loud.
+        printStatus(opts.stdout, result.files.some((file) => file.openingRewritten)
+          ? chalk.gray("   One title and summary written for the range.")
+          : chalk.yellow(
+            `   ⚠️  The ${toVersion} title and summary stand for the whole range: ` +
+            `${result.metadata.openingSkipped || "no opening was written"}.`
+          ));
+      }
+
+      if (opts.stdout) {
+        console.log(result.files.map((file) => file.content).join("\n\n"));
+      }
+
+      if (opts.verbose || opts.dryRun || opts.stdout) {
+        for (const file of result.files) {
+          printStatus(opts.stdout, chalk.gray(`   ${file.path} ← ${file.sources.join(", ")}`));
+        }
+      }
+
+      if (opts.dryRun || opts.stdout) {
+        printStatus(opts.stdout, chalk.gray(
+          result.metadata.usage.modelCalls === 0
+            ? "\n🤖 No model was called: the wording is the one already reviewed."
+            : "\n🤖 Every section is the wording already reviewed; only the title and summary were written."
+        ));
+        return;
+      }
+
+      for (const file of result.files) {
+        await mkdir(dirname(file.path), { recursive: true });
+        const saved = await saveReleaseNotes(file.path, file.content, file.content, file.ownedByRelease);
+        console.log(chalk.green(`${saved === "replaced" ? "💾 Replaced" : "💾 Saved to"} ${file.path}`));
+      }
+
+      const languages = [...new Set(result.files.flatMap((file) => file.language ? [file.language] : []))];
+      await updateOutputIndexes({
+        outputIndexes: outputIndexConfigs(result.config),
+        releases: result.files,
+        projectName: result.config.projectName,
+        environment: toEnvironment,
+        fromVersion,
+        toVersion,
+        date: result.metadata.date,
+        languages: languages.length > 0 ? languages : (result.config.prompt?.languages ?? ["en"]),
+        primaryLanguage: result.config.prompt?.languages?.[0] ?? languages[0] ?? "en",
+        // Promoting calls no model, so an index in a language its template is
+        // not written in keeps the template's own wording.
+        onUpdated: printOutputIndexUpdate,
+      });
+
+      const { usage } = result.metadata;
+      console.log(chalk.gray(
+        `\n📊 ${result.plan.segments.length} release${result.plan.segments.length === 1 ? "" : "s"} promoted | ` +
+        `${result.metadata.date} | ` +
+        (usage.modelCalls === 0
+          ? "no model calls"
+          : `${formatNumber(usage.totalTokens)} tokens | ${usage.modelCalls} model call${usage.modelCalls === 1 ? "" : "s"}`)
+      ));
+    } catch (err: any) {
+      const message = err instanceof PromotionError ? err.message : (err?.message || String(err));
+      console.error(chalk.red("\n❌ Error:"), message);
+      process.exit(1);
+    }
+  });
+
+// ── prompt ──
+program
+  .command("prompt")
+  .description("Ask, in your own words, for a change to release notes already written")
+  .requiredOption("--env <environment>", "Whose release notes to open: PROD, QUA, DEV...")
+  .option("--from <version>", "Open only the releases a range covers, from here")
+  .option("--to <version>", "Open only the releases a range covers, up to here")
+  .option("--lang <language>", "Open one language only")
+  .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
+  .option("--config <path>", "Path to config file")
+  .option(
+    "--ask <request>",
+    "Apply a request and save, with nothing to answer. Repeatable, for CI",
+    (value: string, previous: string[]) => [...previous, value],
+    [] as string[]
+  )
+  .option("--dry-run", "Show what the requests would change without writing anything")
+  .option("-v, --verbose", "Show the provider and instructions the requests are answered with")
+  .option("--stdout", "Write the revised release notes to the terminal without saving files")
+  .action(async (opts) => {
+    try {
+      const session = await PromptSession.open({
+        environment: opts.env,
+        fromVersion: opts.from,
+        toVersion: opts.to,
+        language: opts.lang,
+        provider: opts.with,
+        configPath: opts.config,
+      });
+
+      printOpenDocuments(session, opts.stdout);
+      if (opts.verbose) printVerbosePromptDetails(opts.stdout, session);
+
+      if (opts.ask.length > 0) {
+        const failures = await runRequestedChanges(session, opts.ask, opts.dryRun, opts.stdout);
+        await savePromptSession(session, opts.dryRun, opts.stdout);
+        // CI asked for something and is entitled to know it did not happen.
+        if (failures > 0) process.exit(1);
+        return;
+      }
+
+      // Asking questions at a prompt is a conversation, and a conversation has
+      // nowhere to write its answers but the terminal it is held in.
+      if (opts.stdout) {
+        throw new PromptError("--stdout needs --ask: there is no conversation to hold when the terminal is the output.");
+      }
+
+      await holdConversation(session, opts.dryRun);
+    } catch (err: any) {
+      const message = err instanceof PromptError ? err.message : (err?.message || String(err));
+      console.error(chalk.red("\n❌ Error:"), message);
       process.exit(1);
     }
   });
@@ -498,274 +574,288 @@ program
 
 program.parse();
 
-function getOutputPath(
-  saveTo: string,
-  environment: string,
-  language?: string,
-  fromVersion?: string,
-  toVersion?: string
-): string {
-  const normalizedEnvironment = environment.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
-  const normalizedLanguage = language?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-  return saveTo
-    .replaceAll("{env}", normalizedEnvironment)
-    .replaceAll("{lang}", normalizedLanguage || "{lang}")
-    .replaceAll("{from}", fromVersion || FIRST_RELEASE)
-    .replaceAll("{to}", toVersion || "end");
+/** The name of a folder, used as the environment it holds. */
+function folderName(directory?: string): string | undefined {
+  return directory ? basename(resolve(directory)) : undefined;
+}
+
+// ─────────────────────────────────────────
+// Asking for a change, in your own words
+// ─────────────────────────────────────────
+
+/** Changed lines shown per file before the rest is summarized. */
+const DIFF_LINE_LIMIT = 24;
+
+/**
+ * A spinner that keeps quiet when nobody is watching it turn.
+ *
+ * The conversation reads its answers from wherever standard input comes from,
+ * so it runs just as well down a pipe — and there a spinner is a line of log
+ * noise landing in the middle of the question it was asked.
+ */
+function progress(text: string) {
+  return ora({ text, isSilent: !process.stdout.isTTY }).start();
 }
 
 /**
- * Whether a `saveTo` pattern resolves to a different file for every release.
+ * Hold the conversation: ask what to change, do it, ask again.
  *
- * With a version placeholder each release gets its own file and owns it. Without
- * one, every release resolves to the same path, which is how a cumulative
- * changelog is configured, and there the releases stack up instead.
+ * Nothing has to be learned first — every answer is read by a model that says
+ * what it meant, so "drop the docker part", "put that back" and "that's it" all
+ * work. Answers can equally arrive down a pipe, which is what makes the same
+ * loop usable from a script.
  */
-function isReleaseSpecificPath(saveTo: string): boolean {
-  return saveTo.includes("{from}") || saveTo.includes("{to}");
-}
+async function holdConversation(session: PromptSession, dryRun: boolean): Promise<void> {
+  const { createInterface } = await import("node:readline/promises");
+  const input = createInterface({ input: process.stdin, output: process.stdout });
+  input.on("SIGINT", () => input.close());
 
-function getReleasePathsForIndex(index: OutputIndexTarget, outputTargets: OutputTarget[]): string[] {
-  const languageTargets = outputTargets.filter(
-    (target) => !index.language || !target.language || target.language === index.language
-  );
-  const preferredFormat = index.format;
-  const preferredTargets = languageTargets.filter(
-    (target) => getOutputFormat(target) === preferredFormat
-  );
-  const selectedTargets = preferredTargets.length > 0
-    ? preferredTargets
-    : languageTargets.filter((target) => getOutputFormat(target) !== preferredFormat);
+  const state = { leaving: false, warnedAboutUnsaved: false, toldAboutSaving: false };
+  console.log(chalk.bold("\n💬 Is there anything you would like to change?"));
+  console.log(chalk.gray("   Say it in your own words. Say you are done when you are done."));
+  input.setPrompt(chalk.cyan("\n› "));
+  input.prompt();
 
-  return [...new Set(selectedTargets.map((target) => resolve(target.path)))];
-}
-
-function getOutputFormat(target: OutputTarget): "markdown" | "html" {
-  return target.format === "html" ? "html" : "markdown";
-}
-
-function getOutputIndexLanguageLinks(
-  index: Pick<OutputIndexLanguageTarget, "path" | "groupId">,
-  targets: OutputIndexLanguageTarget[]
-): OutputIndexLanguageLink[] {
-  return targets
-    .filter((candidate) => candidate.groupId === index.groupId)
-    .map((candidate) => ({
-      language: candidate.language,
-      href: toRelativeLink(index.path, candidate.path),
-      active: candidate.path.toLowerCase() === index.path.toLowerCase(),
-    }));
-}
-
-async function createOrUpdateOutputIndex(params: {
-  outputPath: string;
-  format: "markdown" | "html";
-  templatePath?: string;
-  entryTemplatePath?: string;
-  translateTemplate?: (template: string) => Promise<string>;
-  projectName?: string;
-  environment: string;
-  language?: string;
-  fromVersion: string;
-  toVersion: string;
-  date: string;
-  releasePaths: string[];
-  languageLinks: OutputIndexLanguageLink[];
-}): Promise<string> {
-  const languageSwitcher = renderOutputIndexLanguageSwitcher(params.format, params.languageLinks);
-  const record: OutputIndexReleaseRecord = {
-    environment: params.environment,
-    fromVersion: params.fromVersion,
-    toVersion: params.toVersion,
-    date: params.date,
-    href: toRelativeLink(params.outputPath, params.releasePaths[0]),
-  };
-  const renderReleases = (
-    records: OutputIndexReleaseRecord[],
-    entryTemplate: OutputIndexEntryTemplate
-  ) => renderOutputIndexReleases({
-    records,
-    entryTemplate,
-    format: params.format,
-    localizeDate: (date) => localizeIndexDate(date, params.language),
-  });
-
-  if (existsSync(params.outputPath)) {
-    const existing = await readFile(params.outputPath, "utf-8");
-    // An index written before the releases were bounded ends its list at the
-    // first thing that follows it, so give it that boundary before reading the
-    // list back out.
-    const normalizedExisting = ensureOutputIndexReleaseBoundary(
-      params.format === "html" ? unwrapHtmlDocumentCodeFence(existing) : existing,
-      params.format
-    );
-    // The entry template is read from its file on every run, so an index never
-    // has to carry a copy of it: editing the file is what changes the shape.
-    const { entryTemplate } = await loadOutputIndexEntryTemplate(params);
-
-    // Every release the index knows is rendered again from its record, so a
-    // template or a language that changed reaches the whole history, not just
-    // the release being added.
-    const region = readOutputIndexReleasesRegion(normalizedExisting);
-    const records = upsertOutputIndexReleaseRecord(
-      readOutputIndexReleaseRecords(region),
-      record
-    );
-    const legacyEntries = readLegacyOutputIndexEntries(
-      region,
-      records.map(outputIndexReleaseId)
-    );
-    const updated = replaceOutputIndexReleases(
-      normalizedExisting,
-      [renderReleases(records, entryTemplate), ...legacyEntries].filter(Boolean).join("\n")
-    );
-
-    const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(updated);
-    const withLanguageSwitcher = applyOutputIndexLanguageSwitcher(updated, languageSwitcher);
-    if (!params.templatePath && params.languageLinks.length > 1 && !hasLanguageSwitcher) {
-      return updated.replace(RELEASES_MARKER, `${languageSwitcher}\n\n${RELEASES_MARKER}`);
+  for await (const line of input) {
+    if (line.trim()) {
+      await answerMessage(session, line, dryRun, state);
+      if (state.leaving) break;
     }
-    return withLanguageSwitcher;
+    input.prompt();
   }
 
-  const { template, entryTemplate } = await loadOutputIndexEntryTemplate(params);
-  const rendered = renderOutputIndexTemplate(template, {
-    projectName: params.projectName || "Project",
-    environment: params.environment,
-    language: params.language || "",
-    date: localizeIndexDate(params.date, params.language),
-    releases: renderReleases([record], entryTemplate),
-    languages: languageSwitcher,
-    version: CLI_VERSION,
-  }, params.format);
-  if (params.format === "markdown") {
-    return rendered.trim() + "\n";
+  input.close();
+  if (session.pending().length > 0 && !state.leaving) {
+    console.log(chalk.yellow(
+      `\n⚠️  ${session.pending().length} release note(s) still hold changes that were never written.`
+    ));
+  }
+}
+
+/** Do what one message asked for, and say what happened. */
+async function answerMessage(
+  session: PromptSession,
+  message: string,
+  dryRun: boolean,
+  state: { leaving: boolean; warnedAboutUnsaved: boolean; toldAboutSaving: boolean }
+): Promise<void> {
+  const reading = progress("💭 Reading what you asked for...");
+  const action = await session.route(message);
+  reading.stop();
+  if (action.reply) console.log(chalk.gray(`   ${action.reply}`));
+
+  switch (action.action) {
+    case "revise": {
+      const working = progress("✍️  Revising...");
+      const result = await session.revise(action.instruction);
+      working.stop();
+      printPromptEdits(result);
+      // A revision that reports success reads like a file that was written, and
+      // this one was not. Said once: after that it is known.
+      if (session.pending().length > 0 && !state.toldAboutSaving && !dryRun) {
+        state.toldAboutSaving = true;
+        console.log(chalk.gray("   Not written yet — ask me to save when the notes read right."));
+      }
+      return;
+    }
+
+    case "dedupe":
+      printPromptEdits(session.dedupe());
+      return;
+
+    case "undo":
+      console.log(session.undo()
+        ? chalk.green("↩️  Took back the last change.")
+        : chalk.gray("Nothing to take back."));
+      return;
+
+    case "reset":
+      session.reset();
+      console.log(chalk.green("↩️  The release notes are back to the way they were saved."));
+      return;
+
+    case "save":
+      await savePromptSession(session, dryRun);
+      return;
+
+    case "list":
+      printOpenDocuments(session);
+      return;
+
+    case "done": {
+      const pending = session.pending().length;
+      // Leaving unsaved work behind is worth one question, and exactly one:
+      // saying it a second time means it was meant.
+      if (pending > 0 && !state.warnedAboutUnsaved && !dryRun) {
+        state.warnedAboutUnsaved = true;
+        console.log(chalk.yellow(
+          `\n⚠️  ${pending} release note(s) hold changes that are not written yet.`
+        ));
+        console.log(chalk.gray("   Ask me to save them, or say you are done again to leave them alone."));
+        return;
+      }
+      state.leaving = true;
+      console.log(chalk.gray("\n👋 Done."));
+      return;
+    }
+
+    case "unclear":
+      if (!action.reply) {
+        console.log(chalk.gray("   I did not follow that. What should change in the release notes?"));
+      }
+      return;
+  }
+}
+
+/** Apply the requests a command line carried, and report how many failed. */
+async function runRequestedChanges(
+  session: PromptSession,
+  requests: string[],
+  dryRun: boolean,
+  stdout = false
+): Promise<number> {
+  let failures = 0;
+
+  for (const request of requests) {
+    printStatus(stdout, chalk.cyan(`\n› ${request}`));
+    const action = await session.route(request);
+    if (action.reply) printStatus(stdout, chalk.gray(`   ${action.reply}`));
+
+    // A script asked for a change to the release notes, so that is all that is
+    // acted on here: saving is what the end of the run is for, and taking a
+    // change back has nothing to take back.
+    const result = action.action === "dedupe"
+      ? session.dedupe()
+      : await session.revise(action.action === "revise" ? action.instruction : request);
+
+    failures += printPromptEdits(result, stdout);
   }
 
-  const isHtmlTemplate = !params.templatePath || /\.html?$/i.test(params.templatePath);
-  // An index is assembled here from the template and already-escaped entries,
-  // so its own markup is allowed through. A release note is model output and
-  // never gets that trust.
-  const html = isHtmlTemplate
-    ? rendered
-    : markdownToHtml(rendered, { trustedHtml: true });
-  return html;
+  return failures;
 }
 
-/**
- * Joins the summary and the entry template on their way to the translator.
- *
- * It exists for the length of one call: it is never written to a template nor
- * to a generated index.
- */
-const ENTRY_TEMPLATE_SEPARATOR = "__AI_RELEASE_NOTES_PART__";
+function printVerbosePromptDetails(stdout: boolean, session: PromptSession): void {
+  const languages = [...new Set(session.documents.flatMap((d) => d.language ? [d.language] : []))];
 
-/**
- * The summary template to render, and the entry shape to list releases with.
- *
- * The entry shape is not configurable, so it never comes from the summary
- * template. Both are translated in one pass, then split apart again: only the
- * summary is rendered, and the entry shape is stored in the index.
- */
-async function loadOutputIndexEntryTemplate(params: {
-  templatePath?: string;
-  entryTemplatePath?: string;
-  format: "markdown" | "html";
-  translateTemplate?: (template: string) => Promise<string>;
-}): Promise<{ template: string; entryTemplate: OutputIndexEntryTemplate }> {
-  const summary = await loadOutputIndexTemplate(params.templatePath, params.format);
-  const entryFile = await loadEntryTemplate(params.entryTemplatePath, params.format);
-  const joined = `${summary}\n${ENTRY_TEMPLATE_SEPARATOR}\n${entryFile}`;
-  const localized = params.translateTemplate
-    ? await params.translateTemplate(joined)
-    : joined;
-
-  // A translation that lost the separator cannot be split back apart. The
-  // summary stays usable; the entry falls back to the file that was sent.
-  const separator = localized.lastIndexOf(ENTRY_TEMPLATE_SEPARATOR);
-  return {
-    template: (separator < 0 ? localized : localized.slice(0, separator)).trimEnd(),
-    entryTemplate: separator < 0
-      ? entryFile.trim()
-      : localized.slice(separator + ENTRY_TEMPLATE_SEPARATOR.length).trim(),
-  };
+  printStatus(stdout, chalk.gray("\n🧭 Session details"));
+  printStatus(stdout, chalk.gray(`   Provider: ${session.provider}`));
+  printStatus(stdout, chalk.gray(
+    `   Instructions: ${describePromptSource(session.config.prompt?.instructions)}`
+  ));
+  if (languages.length > 0) {
+    printStatus(stdout, chalk.gray(`   Languages open: ${languages.join(", ")}`));
+  }
 }
 
-async function loadEntryTemplate(
-  entryTemplatePath: string | undefined,
-  format: "markdown" | "html"
-): Promise<string> {
-  if (!entryTemplatePath) {
-    return loadBundledTemplate("default-release-summary-entry", format);
+function printOpenDocuments(session: PromptSession, stdout = false): void {
+  const count = session.documents.length;
+  printStatus(stdout, chalk.blue(
+    `\n📝 ${count} release note${count === 1 ? "" : "s"} open for ${session.environment}`
+  ));
+
+  for (const document of session.documents) {
+    const range = [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
+    const language = document.language ? ` [${document.language}]` : "";
+    const pending = document.content !== document.saved ? chalk.yellow(" (changed)") : "";
+    printStatus(stdout,
+      chalk.gray(`   ${relative(process.cwd(), document.path)}`) +
+      chalk.gray(range ? `  ${range}` : "") + chalk.gray(language) + pending
+    );
+    if (document.unrevisable) {
+      printStatus(stdout, chalk.yellow(`      ⚠️  ${document.unrevisable}`));
+    }
+  }
+}
+
+/** Report what a request did, and return how many files it failed on. */
+function printPromptEdits(result: PromptEditResult, stdout = false): number {
+  let changed = 0;
+  let failed = 0;
+
+  for (const edit of result.edits) {
+    const path = relative(process.cwd(), edit.path);
+    if (edit.skipped) {
+      failed += 1;
+      printStatus(stdout, chalk.yellow(`   ⏭️  ${path} — ${edit.skipped}`));
+      continue;
+    }
+    if (!edit.changed) {
+      printStatus(stdout, chalk.gray(`   ·   ${path} — nothing there to change`));
+      continue;
+    }
+
+    changed += 1;
+    const removed = edit.removed?.length
+      ? chalk.gray(`  (${edit.removed.length} repeated line${edit.removed.length === 1 ? "" : "s"})`)
+      : "";
+    printStatus(stdout, chalk.green(`   ✏️  ${path}`) + removed);
+    printDiff(edit.before, edit.after, stdout);
   }
 
-  const resolvedPath = resolve(entryTemplatePath);
-  if (!existsSync(resolvedPath)) {
-    throw new Error(`Output index entry template not found: ${resolvedPath}`);
+  const usage = result.via === "comparison"
+    ? " | no model call: the lines were compared exactly"
+    : ` | ${formatNumber(result.usage.totalTokens)} tokens | ${result.usage.modelCalls} model call${result.usage.modelCalls === 1 ? "" : "s"} | ${formatDuration(result.usage.durationMs)}`;
+  printStatus(stdout, chalk.gray(`\n   ${changed} of ${result.edits.length} revised${usage}`));
+
+  return failed;
+}
+
+function printDiff(before: string, after: string, stdout = false): void {
+  // A line that only gained or lost blank space is not a change anyone asked to
+  // review, and a long run of them would bury the ones that are.
+  const changes = changedLines(before, after).filter((line) => line.text.trim());
+
+  for (const line of changes.slice(0, DIFF_LINE_LIMIT)) {
+    printStatus(stdout, line.kind === "added"
+      ? chalk.green(`      + ${line.text.trim()}`)
+      : chalk.red(`      - ${line.text.trim()}`));
   }
-  return readFile(resolvedPath, "utf-8");
+
+  if (changes.length > DIFF_LINE_LIMIT) {
+    printStatus(stdout, chalk.gray(`      … ${changes.length - DIFF_LINE_LIMIT} more changed lines`));
+  }
 }
 
-async function loadOutputIndexTemplate(
-  templatePath: string | undefined,
-  format: "markdown" | "html"
-): Promise<string> {
-  if (!templatePath) {
-    return loadBundledTemplate("default-release-summary", format);
+async function savePromptSession(
+  session: PromptSession,
+  dryRun: boolean,
+  stdout = false
+): Promise<void> {
+  const pending = session.pending();
+  if (pending.length === 0) {
+    printStatus(stdout, chalk.gray("\n   Nothing to write: the release notes are as they were."));
+    return;
   }
 
-  const resolvedTemplatePath = resolve(templatePath);
-  if (!existsSync(resolvedTemplatePath)) {
-    throw new Error(`Output index template not found: ${resolvedTemplatePath}`);
+  // The revised notes are the output asked for, so they go out whole and
+  // nothing is written over: what to keep is the caller's to decide.
+  if (stdout) {
+    console.log(pending.map((document) => document.content).join("\n\n"));
+    return;
   }
-  return readFile(resolvedTemplatePath, "utf-8");
+
+  if (dryRun) {
+    console.log(chalk.yellow(`\n🔍 Dry run — ${pending.length} file(s) would be written:`));
+    for (const document of pending) {
+      console.log(chalk.gray(`   ${relative(process.cwd(), document.path)}`));
+    }
+    return;
+  }
+
+  for (const path of await session.save()) {
+    console.log(chalk.green(`💾 Saved ${relative(process.cwd(), path)}`));
+  }
 }
 
-function loadBundledTemplate(name: string, format: "markdown" | "html"): Promise<string> {
-  const extension = format === "html" ? "html" : "md";
-  return readFile(resolve(__dirname, `../../templates/${name}.${extension}`), "utf-8");
+function outputIndexConfigs(config: ReleaseNotesConfig): OutputIndexConfig[] {
+  if (!config.outputIndex) return [];
+  return Array.isArray(config.outputIndex) ? config.outputIndex : [config.outputIndex];
 }
 
-function renderOutputIndexTemplate(
-  template: string,
-  values: {
-    projectName: string;
-    environment: string;
-    language: string;
-    date: string;
-    releases: string;
-    languages: string;
-    version: string;
-  },
-  format: "markdown" | "html" = "markdown"
-): string {
-  // A project name and an environment reach an HTML index straight from config
-  // and the command line, so they are escaped like every other value there.
-  const value = (raw: string) => (format === "html" ? escapeHtml(raw) : raw);
-  const rendered = template
-    .replaceAll("{{projectName}}", value(values.projectName))
-    .replaceAll("{{environment}}", value(values.environment))
-    .replaceAll("{{language}}", value(values.language))
-    .replaceAll("{{date}}", value(values.date))
-    .replaceAll("{{releases}}", `${values.releases}\n${RELEASES_END_MARKER}`)
-    .replaceAll("{{version}}", value(values.version));
-  return applyOutputIndexLanguageSwitcher(rendered, values.languages);
-}
-
-function localizeIndexDate(date: string, language?: string): string {
-  if (!language) return date;
-  const parsed = new Date(date);
-  if (Number.isNaN(parsed.getTime())) return date;
-  return new Intl.DateTimeFormat(language, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(parsed);
-}
-
-function shouldTranslateTemplate(templateLanguage: string, outputLanguage?: string): boolean {
-  if (!outputLanguage) return false;
-  return languageCode(templateLanguage) !== languageCode(outputLanguage);
+function printOutputIndexUpdate(path: string, change: "release" | "languages"): void {
+  console.log(chalk.green(change === "languages"
+    ? "🌐 Refreshed languages in " + path
+    : "📚 Updated output index " + path));
 }
 
 async function translateOutputIndexTemplate(
@@ -792,15 +882,6 @@ async function translateOutputIndexTemplate(
     throw new Error("Translated output-index template did not preserve its entry template");
   }
   return { text: translated, usage: result.usage };
-}
-
-/** Models occasionally wrap an HTML template in a Markdown code fence. */
-function unwrapHtmlDocumentCodeFence(content: string): string {
-  const openingFence = /^\s*```html?\s*\r?\n(?=\s*<!doctype html|\s*<html\b)/i;
-  if (!openingFence.test(content)) return content;
-  return content
-    .replace(openingFence, "")
-    .replace(/\r?\n```\s*$/, "");
 }
 
 function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
@@ -842,47 +923,6 @@ function addTemplateUsage(
   total.outputTokens += usage.outputTokens;
   total.totalTokens += usage.totalTokens;
   total.modelCalls += 1;
-}
-
-function languageCode(language: string): string {
-  return language.toLowerCase().split(/[-_]/, 1)[0];
-}
-
-function ensureOutputIndexReleaseBoundary(
-  content: string,
-  format: "markdown" | "html"
-): string {
-  if (!content.includes(RELEASES_MARKER) || content.includes(RELEASES_END_MARKER)) {
-    return content;
-  }
-
-  const releasesStart = content.indexOf(RELEASES_MARKER) + RELEASES_MARKER.length;
-  const boundary = [
-    format === "html"
-      ? content.indexOf("</main>", releasesStart)
-      : content.indexOf("\n---\n", releasesStart),
-  ].filter((index) => index >= 0)[0];
-
-  if (boundary === undefined) {
-    return `${content.trimEnd()}\n${RELEASES_END_MARKER}\n`;
-  }
-  return `${content.slice(0, boundary).trimEnd()}\n${RELEASES_END_MARKER}\n${content.slice(boundary).replace(/^\n/, "")}`;
-}
-
-function toRelativeLink(fromPath: string, toPath: string): string {
-  return relative(dirname(fromPath), toPath)
-    .replaceAll("\\", "/")
-    .split("/")
-    .map((segment) => segment === "." || segment === ".." ? segment : encodeURIComponent(segment))
-    .join("/");
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function formatNumber(value: number): string {
