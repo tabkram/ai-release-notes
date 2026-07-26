@@ -610,7 +610,7 @@ async function holdConversation(session: PromptSession, dryRun: boolean): Promis
   const input = createInterface({ input: process.stdin, output: process.stdout });
   input.on("SIGINT", () => input.close());
 
-  const state = { leaving: false, warnedAboutUnsaved: false };
+  const state = { leaving: false, warnedAboutUnsaved: false, toldAboutSaving: false };
   console.log(chalk.bold("\n💬 Is there anything you would like to change?"));
   console.log(chalk.gray("   Say it in your own words. Say you are done when you are done."));
   input.setPrompt(chalk.cyan("\n› "));
@@ -637,7 +637,7 @@ async function answerMessage(
   session: PromptSession,
   message: string,
   dryRun: boolean,
-  state: { leaving: boolean; warnedAboutUnsaved: boolean }
+  state: { leaving: boolean; warnedAboutUnsaved: boolean; toldAboutSaving: boolean }
 ): Promise<void> {
   const reading = progress("💭 Reading what you asked for...");
   const action = await session.route(message);
@@ -650,6 +650,12 @@ async function answerMessage(
       const result = await session.revise(action.instruction);
       working.stop();
       printPromptEdits(result);
+      // A revision that reports success reads like a file that was written, and
+      // this one was not. Said once: after that it is known.
+      if (session.pending().length > 0 && !state.toldAboutSaving && !dryRun) {
+        state.toldAboutSaving = true;
+        console.log(chalk.gray("   Not written yet — ask me to save when the notes read right."));
+      }
       return;
     }
 

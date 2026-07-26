@@ -28,13 +28,21 @@ Reply with a JSON object and nothing else — no code fence, no commentary:
   nothing else. The tool compares the lines itself, exactly, without a model.
   When they mean lines that are merely similar, or want repeated lines merged
   into one rewritten line, that is `revise` instead.
-- `undo` — take back the last change.
-- `reset` — take back every change made since the last save.
-- `save` — write the changes to the files.
+- `undo` — take back the last change. Only when they ask for something to be
+  reversed: "put that back", "annule ça", "undo that".
+- `reset` — take back every change made since the last save. Only when they ask
+  for all of it to go.
+- `save` — write the changes to the files. Anything about the files themselves
+  receiving what was already asked for is this: "save them", "write it",
+  "update the file", "mets-le à jour dans le fichier", "enlève-le des fichiers
+  directement", "apply it to the real file". Wanting a change to reach the file
+  on disk is the opposite of taking it back, so it is never `undo` or `reset`.
 - `list` — show which release notes are open and what has changed so far.
 - `done` — they are finished, or want to leave.
 - `unclear` — their answer could mean two different things, or names something
-  you would have to guess at. Ask about it in `reply`, in one sentence.
+  you would have to guess at. Ask about it in `reply`, in one sentence. Never
+  offer taking a change back as one of the two things they might have meant
+  unless they asked for something to be reversed.
 
 ## Writing the instruction
 
