@@ -9,10 +9,8 @@
 import { getTagCreationDate } from "./git.js";
 
 export interface ReleaseDateOptions {
-  /** An already formatted display date, used as-is. */
+  /** "now" (default), "tag", or a date such as "2026-07-20". */
   date?: string;
-  /** A selector: "now", "tag", or an ISO date such as "2026-07-20". */
-  releaseDate?: string;
 }
 
 export function formatDate(date: Date): string {
@@ -27,11 +25,11 @@ export async function resolveReleaseDate(
   options: ReleaseDateOptions,
   toVersion: string
 ): Promise<string> {
-  if (!options.releaseDate) {
-    return options.date || formatDate(new Date());
+  if (!options.date) {
+    return formatDate(new Date());
   }
 
-  const value = options.releaseDate.trim();
+  const value = options.date.trim();
   if (value.toLowerCase() === "now") {
     return formatDate(new Date());
   }
@@ -40,7 +38,7 @@ export async function resolveReleaseDate(
     if (!tagDate) {
       throw new Error(
         `Could not find a creation date for tag "${toVersion}". ` +
-        `Use --release-date now or an ISO date such as 2026-07-20.`
+        `Use --date now or an ISO date such as 2026-07-20.`
       );
     }
     return formatDate(tagDate);

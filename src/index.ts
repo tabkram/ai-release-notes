@@ -45,6 +45,7 @@ export {
   mergeReleaseDocuments,
   joinReleaseDocuments,
   mergeSections,
+  splitReleaseOpening,
   dedupeReleaseDocument,
   extractReleaseContent,
   releaseContentRange,
@@ -123,6 +124,7 @@ export type {
   PromoteOptions,
   PromoteResult,
   PromotedFile,
+  OpeningModelCall,
   PromotionPlan,
   PromotionSegment,
 } from "./promote.js";
@@ -146,6 +148,8 @@ export type {
   ReleaseBlock,
   ReleaseSection,
   ReleaseContentRange,
+  ReleaseMergeOptions,
+  ReleaseOpening,
   DedupeResult,
 } from "./release-document.js";
 

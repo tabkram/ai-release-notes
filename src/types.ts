@@ -150,10 +150,8 @@ export interface GenerateOptions {
   toVersion: string;
   /** Environment name: PROD, QUA, DEV, etc. */
   environment: string;
-  /** Explicit display date. Prefer releaseDate for a date selector. */
+  /** Release date: "now" (default), "tag", or an ISO date such as "2026-07-20". */
   date?: string;
-  /** Release date selector: "now", "tag", or an ISO date such as "2026-07-20". */
-  releaseDate?: string;
   /** Override LLM provider */
   provider?: ProviderName | string;
   /** Path to config file */

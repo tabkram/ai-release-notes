@@ -51,12 +51,22 @@ schemes such as `javascript:` are rendered as plain text.
 
 ### Promoted releases
 
-`promote` calls no provider: it moves release files this tool already wrote from
-one environment to the next. Their markup was escaped when it was generated, and
-is placed on the promoted page as it stands rather than escaped a second time —
-so the files under `output.saveTo` are trusted to the same degree as the rest of
-the repository they live in. A release note edited by hand after generation is
+`promote` moves release files this tool already wrote from one environment to
+the next. Their markup was escaped when it was generated, and is placed on the
+promoted page as it stands rather than escaped a second time — so the files
+under `output.saveTo` are trusted to the same degree as the rest of the
+repository they live in. A release note edited by hand after generation is
 promoted with those edits, markup included.
+
+Promoting one release calls no provider. Merging several of them into one note
+reaches a provider once, and only for the opening that note carries: the
+headings, dates and summaries of the releases being merged are sent, in a
+labelled data block, and the sections are not. What comes back is sanitized the
+way any model output is before it reaches a page, and an answer carrying
+sections of its own is refused rather than placed — the merged sections are the
+reviewed wording promoting exists to preserve, and nothing the model returns can
+reach them. With no provider configured, the call is never made and the newest
+release's own opening stands for the range.
 
 ### Revised releases
 

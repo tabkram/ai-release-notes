@@ -20,7 +20,7 @@ npx ai-release-notes generate \
   --to v1.28.0 \
   --with claude \
   --env PROD \
-  --release-date tag
+  --date tag
 ```
 
 Omitting `--from` is the same as passing `--from start`: both include the

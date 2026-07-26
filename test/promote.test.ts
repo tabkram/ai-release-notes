@@ -9,6 +9,7 @@ import {
   mergeReleaseDocuments,
   parseReleaseDocument,
   serializeReleaseDocument,
+  splitReleaseOpening,
 } from "../src/release-document.js";
 import { planPromotion, promote, PromotionError } from "../src/promote.js";
 import { updateOutputIndexes } from "../src/output-index.js";
@@ -243,9 +244,72 @@ test("names a merged release after the newest one in it", () => {
 
   assert.match(merged, /^# Release v0\.1\.2/);
   assert.doesNotMatch(merged, /# Release v0\.1\.0/);
-  // Both summaries are kept: neither was written by this tool.
-  assert.match(merged, /A first summary paragraph\./);
+  // One release note opens once: the newest opening stands for the range
+  // rather than two titles, two dates and two summaries in a row.
   assert.match(merged, /A second summary paragraph\./);
+  assert.doesNotMatch(merged, /A first summary paragraph\./);
+});
+
+test("lists the newest release's lines first when asked", () => {
+  const merged = mergeReleaseDocuments([firstNote, secondNote], "markdown", {
+    leadWith: "newest",
+  });
+
+  // The newest release's own order is kept; it just comes first.
+  assert.ok(merged.indexOf("- Added export to CSV.") < merged.indexOf("- Added a dashboard."));
+  assert.ok(merged.indexOf("- Added export to CSV.") < merged.indexOf("- Added filters."));
+});
+
+test("keeps the order releases shipped in by default", () => {
+  const merged = mergeReleaseDocuments([firstNote, secondNote], "markdown");
+
+  assert.ok(merged.indexOf("- Added a dashboard.") < merged.indexOf("- Added export to CSV."));
+});
+
+test("cuts a release note where its first section begins", () => {
+  const { opening, sections } = splitReleaseOpening(firstNote, "markdown");
+
+  assert.match(opening, /# Release v0\.1\.0/);
+  assert.match(opening, /A first summary paragraph\./);
+  assert.doesNotMatch(opening, /## New features/);
+  assert.match(sections, /^## New features/);
+});
+
+test("reads a note out of a page whose template closes it with a common tag", () => {
+  // `</div>` is no landmark: a page is full of them. The run of literal text
+  // around the slot is, and without it the note is only found through <main>,
+  // which hands back the wrapper as one block nothing can be merged on.
+  const template = [
+    "<html><body>",
+    "<main>",
+    "  <div class=\"card\">",
+    "    {{content}}",
+    "  </div>",
+    "</main>",
+    "<footer>v{{version}}</footer>",
+    "</body></html>",
+  ].join("\n");
+  const page = template
+    .replace("{{content}}", "<h1>Release v1</h1>\n<h2>Fixes</h2>")
+    .replace("{{version}}", "0.0.1");
+
+  const content = extractReleaseContent(page, template);
+
+  assert.equal(content, "<h1>Release v1</h1>\n<h2>Fixes</h2>");
+  assert.equal(parseReleaseDocument(content || "", "html").children.length, 1);
+});
+
+test("merges two notes read back off a page that wraps them", () => {
+  const wrap = (note: string) => `<div class="card-body">\n${note}\n</div>`;
+  const merged = mergeReleaseDocuments([
+    wrap("<h1>Release v1</h1>\n<h2>Fixes</h2>\n<ul>\n<li>Fixed login.</li>\n</ul>"),
+    wrap("<h1>Release v2</h1>\n<h2>Fixes</h2>\n<ul>\n<li>Fixed export.</li>\n</ul>"),
+  ], "html");
+
+  assert.equal(merged.match(/<h1>/g)?.length, 1);
+  assert.equal(merged.match(/<h2>Fixes<\/h2>/g)?.length, 1);
+  assert.match(merged, /Fixed login\./);
+  assert.match(merged, /Fixed export\./);
 });
 
 test("keeps a single release exactly as it was written", () => {
@@ -434,5 +498,189 @@ test("refuses to promote an environment onto itself", async () => {
       promote({ fromEnvironment: "QUA", toEnvironment: "PROD", configPath }),
       (error: unknown) => error instanceof PromotionError && /same path/.test(error.message)
     );
+  });
+});
+
+// ─────────────────────────────────────────
+// The one opening a merged range carries
+// ─────────────────────────────────────────
+
+/** Two releases in QUA, ready to be promoted as one. */
+async function withTwoReleases(
+  run: (params: { configPath: string; directory: string }) => Promise<void>
+): Promise<void> {
+  await withDirectory(async (directory) => {
+    const saveTo = join(directory, "{env}", "release-notes_{from}_{to}.html");
+    const configPath = await writeConfig(directory, `output:\n  - format: html\n    saveTo: ${saveTo}`);
+    const template = await loadReleaseNoteTemplate();
+    const page = (note: string, fromVersion: string, toVersion: string) =>
+      renderReleaseNoteHtml(template, note, {
+        fromVersion,
+        toVersion,
+        environment: "QUA",
+        date: "July 21, 2026",
+      });
+
+    await writeRelease(
+      join(directory, "QUA", "release-notes_start_v0.1.0.html"),
+      page(firstNote, "start", "v0.1.0")
+    );
+    await writeRelease(
+      join(directory, "QUA", "release-notes_v0.1.0_v0.1.2.html"),
+      page(secondNote, "v0.1.0", "v0.1.2")
+    );
+
+    await run({ configPath, directory });
+  });
+}
+
+test("asks for one opening when several releases become one note", async () => {
+  await withTwoReleases(async ({ configPath }) => {
+    const requests: Array<{ system: string; user: string }> = [];
+
+    const result = await promote({
+      fromEnvironment: "QUA",
+      toEnvironment: "PROD",
+      configPath,
+      date: "July 26, 2026",
+      callModel: async (request) => {
+        requests.push(request);
+        return {
+          text: "<h1>Release v0.1.2</h1>\n<p>Everything the range brought.</p>",
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        };
+      },
+    });
+
+    assert.equal(requests.length, 1);
+    // The model is shown the openings and nothing else: the sections are the
+    // reviewed wording promoting exists to preserve.
+    assert.match(requests[0].user, /A first summary paragraph\./);
+    assert.match(requests[0].user, /A second summary paragraph\./);
+    assert.doesNotMatch(requests[0].user, /Fixed the login button\./);
+    assert.doesNotMatch(requests[0].user, /Added export to CSV\./);
+
+    assert.equal(result.files[0].openingRewritten, true);
+    assert.equal(result.metadata.usage.modelCalls, 1);
+    assert.match(result.files[0].content, /Everything the range brought\./);
+    // Every section still reads word for word as it was reviewed.
+    assert.match(result.files[0].content, /Fixed the login button\./);
+    assert.match(result.files[0].content, /Added export to CSV\./);
+    assert.doesNotMatch(result.files[0].content, /A second summary paragraph\./);
+  });
+});
+
+test("keeps the newest opening when no model answers for the range", async () => {
+  await withTwoReleases(async ({ configPath }) => {
+    const result = await promote({
+      fromEnvironment: "QUA",
+      toEnvironment: "PROD",
+      configPath,
+      date: "July 26, 2026",
+      callModel: async () => {
+        throw new Error("no key");
+      },
+    });
+
+    // A model that will not answer is no reason to lose a promotion.
+    assert.equal(result.files[0].openingRewritten, undefined);
+    assert.equal(result.files[0].content.match(/<h1>/g)?.length, 1);
+    assert.match(result.files[0].content, /Release v0\.1\.2/);
+    assert.match(result.files[0].content, /A second summary paragraph\./);
+    assert.match(result.files[0].content, /Fixed the login button\./);
+    // The run says what it fell back to, rather than reading as a success.
+    assert.match(result.metadata.openingSkipped || "", /could not be reached: no key/);
+  });
+});
+
+test("refuses an opening that came back carrying sections of its own", async () => {
+  await withTwoReleases(async ({ configPath }) => {
+    const result = await promote({
+      fromEnvironment: "QUA",
+      toEnvironment: "PROD",
+      configPath,
+      date: "July 26, 2026",
+      callModel: async () => ({
+        text: "<h1>Release v0.1.2</h1>\n<p>Rewritten.</p>\n<h2>New features</h2>\n<ul><li>Invented.</li></ul>",
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }),
+    });
+
+    assert.equal(result.files[0].openingRewritten, undefined);
+    assert.doesNotMatch(result.files[0].content, /Invented\./);
+    assert.match(result.files[0].content, /A second summary paragraph\./);
+    assert.match(result.metadata.openingSkipped || "", /release note of its own/);
+  });
+});
+
+test("leaves the model alone when one release is promoted", async () => {
+  await withDirectory(async (directory) => {
+    const saveTo = join(directory, "{env}", "release-notes_{from}_{to}.html");
+    const configPath = await writeConfig(directory, `output:\n  - format: html\n    saveTo: ${saveTo}`);
+    const template = await loadReleaseNoteTemplate();
+    await writeRelease(
+      join(directory, "QUA", "release-notes_start_v0.1.0.html"),
+      renderReleaseNoteHtml(template, firstNote, {
+        fromVersion: "start", toVersion: "v0.1.0", environment: "QUA", date: "July 21, 2026",
+      })
+    );
+
+    let called = false;
+    const result = await promote({
+      fromEnvironment: "QUA",
+      toEnvironment: "PROD",
+      configPath,
+      date: "July 26, 2026",
+      callModel: async () => {
+        called = true;
+        return { text: "", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+      },
+    });
+
+    // One release already carries the opening it needs.
+    assert.equal(called, false);
+    assert.equal(result.metadata.usage.modelCalls, 0);
+    assert.match(result.files[0].content, /A first summary paragraph\./);
+  });
+});
+
+test("points a merged opening at the range and the environment promoted to", async () => {
+  await withDirectory(async (directory) => {
+    const saveTo = join(directory, "{env}", "release-notes_{from}_{to}.html");
+    const configPath = await writeConfig(directory, `output:\n  - format: html\n    saveTo: ${saveTo}`);
+    const template = await loadReleaseNoteTemplate();
+    const opening = (version: string, since: string) =>
+      `# Release ${version}\n\n_qua · July 21, 2026 · Changes since ${since}_\n\n---\n\nA summary.\n\n## Fixes\n\n- Fixed ${version}.`;
+
+    await writeRelease(
+      join(directory, "QUA", "release-notes_v0.1.0_v0.2.0.html"),
+      renderReleaseNoteHtml(template, opening("v0.2.0", "v0.1.0"), {
+        fromVersion: "v0.1.0", toVersion: "v0.2.0", environment: "QUA", date: "July 21, 2026",
+      })
+    );
+    await writeRelease(
+      join(directory, "QUA", "release-notes_v0.2.0_v0.3.0.html"),
+      renderReleaseNoteHtml(template, opening("v0.3.0", "v0.2.0"), {
+        fromVersion: "v0.2.0", toVersion: "v0.3.0", environment: "QUA", date: "July 21, 2026",
+      })
+    );
+
+    const result = await promote({
+      fromEnvironment: "QUA",
+      toEnvironment: "PROD",
+      configPath,
+      date: "July 26, 2026",
+      callModel: async () => {
+        throw new Error("no key");
+      },
+    });
+
+    // The opening left standing is the newest release's, so it named QUA and
+    // the version that release alone followed.
+    assert.match(result.files[0].content, /prod · July 21, 2026 · Changes since v0\.1\.0/);
+    assert.doesNotMatch(result.files[0].content, /qua ·/);
+    assert.doesNotMatch(result.files[0].content, /Changes since v0\.2\.0/);
+    // A version named in a section is not a value the opening states.
+    assert.match(result.files[0].content, /Fixed v0\.2\.0\./);
   });
 });

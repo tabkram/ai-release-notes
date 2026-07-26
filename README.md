@@ -113,8 +113,7 @@ time. Translated releases include every translation call in these totals.
 | `--from <version>` | Previous version tag, or `start` for the full history (default: `start`) |
 | `--to <version>` | Current version tag |
 | `--env <env>` | **Required.** Environment name (PROD, STAGING, etc.) |
-| `--release-date <value>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
-| `--date <value>` | Alias for `--release-date` |
+| `--date <value>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
 | `--with <provider>` | LLM override; see [provider aliases](#1-providers-and-api-keys) |
 | `--config <path>` | Path to config file |
 | `--output <path>` | Output file path (overrides `output.saveTo`) |
@@ -134,14 +133,12 @@ Use the current date (the default), the selected `--to` tag's creation date,
 or an explicit ISO date:
 
 ```bash
-ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --release-date now
-ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --release-date tag
-ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --release-date 2026-07-20
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --date now
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --date tag
+ai-release-notes generate --from v1.25.9 --to v1.28.0 --env PROD --date 2026-07-20
 ```
 
-In the library API, pass the same values as `releaseDate`. The older `date`
-field remains available when you need to supply an already formatted display
-date.
+In the library API, pass the same values as `date`.
 
 ---
 
@@ -150,8 +147,8 @@ date.
 A release note written for QUA has already been read, corrected and agreed on.
 When that same release reaches PROD, nothing about it has changed — so
 `promote` reuses the files QUA already holds instead of asking a model to write
-them again. **No prompt is built and no provider is called**, which is also why
-no API key is needed:
+them again. **Promoting one release builds no prompt and calls no provider**,
+which is also why no API key is needed:
 
 ```bash
 # Everything PROD is missing, in one command
@@ -169,11 +166,39 @@ chain rather than the version numbers, so a project that does not release in
 ascending order is followed just as well.
 
 - **One file covers the range** — it is promoted as it stands, word for word.
-- **Several files cover it** — they are merged, oldest first, into the one note
-  that covers the whole range: sections carrying the same heading become one
-  section, their lists become one list, and a line both releases carry is
-  listed once. The merged note takes its title from the newest release in it.
-  `--merge concat` keeps each note whole instead, one after the other.
+- **Several files cover it** — they are merged into the one note that covers
+  the whole range: sections carrying the same heading become one section,
+  their scopes become one scope, their lists become one list, and a line two
+  releases both carry is listed once. Inside a list the newest release's lines
+  come first, then the ones released before them. `--merge concat` keeps each
+  note whole instead, one after the other.
+
+Every section survives that merge word for word — the reviewed wording is the
+whole point. What cannot survive it is the opening: three headings, three dates
+and three summaries do not add up to one release note. So the merged note is
+given a single opening, and that is the one thing a model is asked for:
+
+```text
+🚀 Promoting QUA → PROD: v1.25.7 → v1.28.0
+   v1.25.7 → v1.26.0
+   v1.26.0 → v1.27.0
+   v1.27.0 → v1.28.0
+   Sections merged word for word; one title and summary written for the range.
+```
+
+The model is shown the three openings and nothing else, so it cannot reach the
+sections, and an answer that comes back carrying sections of its own is
+refused.
+
+When no provider is configured, when the call fails, or when the answer is
+refused, the newest release's title and summary stand for the range instead,
+with the environment and the version it followed pointed at what was actually
+promoted. That is a true opening, only narrower than the range it covers, so
+the run says so rather than reading as a success:
+
+```text
+   ⚠️  The v1.28.0 title and summary stand for the whole range: no provider is configured.
+```
 
 With no `--from`, promotion starts where the target environment already is, so
 running it twice does nothing the second time. With no `--to`, it goes to the
@@ -213,8 +238,9 @@ outputs are reported as skipped.
 | `--from-dir <dir>` / `--to-dir <dir>` | Read/write the releases in these folders |
 | `--pattern <pattern>` | File name inside those folders (default: the configured one) |
 | `--merge <sections\|concat>` | How several releases become one note (default: `sections`) |
+| `--with <provider>` | LLM provider used to write the opening of a merged range |
 | `--lang <language>` | Promote one language only |
-| `--release-date <value>` | `now` (default), `tag`, or an ISO date |
+| `--date <value>` | Release date: `now` (default), `tag`, or an ISO date |
 | `--config <path>` | Path to config file |
 | `--dry-run` | Show what would be promoted without writing anything |
 | `--stdout` | Write the promoted notes to the terminal without saving files |
@@ -489,9 +515,11 @@ travels with the repository. Both are treated as untrusted:
 - **Safe rendering.** Raw HTML in a release note is escaped and link targets are
   limited to `http`, `https`, `mailto`, and relative paths.
 - **Bounded spend.** `git.maxCommits` (default 200) caps one run.
-- **Promotion.** `promote` calls no provider and reuses files this tool already
-  wrote, whose markup was escaped when it was generated; those files are trusted
-  like the rest of your repository.
+- **Promotion.** `promote` reuses files this tool already wrote, whose markup was
+  escaped when it was generated; those files are trusted like the rest of your
+  repository. Merging several of them reaches a provider once, for the opening
+  alone: the sections are never sent, and the answer is sanitized like any other
+  model output before it reaches a page.
 - **Endpoint checks.** `baseURL` must be `http`/`https`, and a non-local one
   warns before any prompt leaves the machine.
 
@@ -572,7 +600,8 @@ Each step is exported on its own when you need only part of it:
 | `discoverReleases(saveTo, values)` | Read a `saveTo` pattern back off disk: which releases exist, and what their paths say about them |
 | `formatOutputPath(saveTo, values)` | Fill `{env}`, `{lang}`, `{from}`, `{to}`; anything not supplied stays a placeholder |
 | `planPromotion({ available, … })` | Chain release files into the run that carries one version to another |
-| `mergeReleaseDocuments(docs, format)` | Merge release notes by section and list, oldest first |
+| `mergeReleaseDocuments(docs, format, opts)` | Merge release notes by section and list; `leadWith: "newest"` puts the last release's lines first |
+| `splitReleaseOpening(content, format)` | Cut a note where its first section begins: the title, date and summary on one side, the sections on the other |
 | `dedupeReleaseDocument(content, format)` | Drop the lines a note lists twice, and report which they were |
 | `parseReleaseDocument` / `serializeReleaseDocument` | A release note as a section tree, and back again |
 | `extractReleaseContent(page, template?)` | Read a release note back out of the HTML page it was rendered into |

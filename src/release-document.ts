@@ -9,7 +9,9 @@
  *
  * Merging is what a reader would do by hand: sections that carry the same
  * heading become one section, their lists become one list, and a line that
- * appears in two releases is listed once.
+ * appears in two releases is listed once. What no reader would do by hand is
+ * keep three titles, three dates and three summaries, so the newest release's
+ * opening stands for the range and the rest go.
  */
 
 export type ReleaseFormat = "markdown" | "html";
@@ -55,20 +57,34 @@ export function serializeReleaseDocument(section: ReleaseSection, format: Releas
 // Merging release notes
 // ─────────────────────────────────────────
 
+/** How several release notes become one. */
+export interface ReleaseMergeOptions {
+  /**
+   * Which release a merged list opens with. `newest` puts the last release's
+   * lines above the ones released before them — what someone catching up on
+   * three releases at once reads for. `oldest` keeps the order they shipped in.
+   */
+  leadWith?: "oldest" | "newest";
+}
+
 /**
  * Put several release notes together, oldest first.
  *
  * A single note is returned untouched: promoting one release copies its words
  * rather than reformatting them.
  */
-export function mergeReleaseDocuments(documents: string[], format: ReleaseFormat): string {
+export function mergeReleaseDocuments(
+  documents: string[],
+  format: ReleaseFormat,
+  options: ReleaseMergeOptions = {}
+): string {
   const contents = documents.map((document) => document.trim()).filter(Boolean);
   if (contents.length === 0) return "";
   if (contents.length === 1) return contents[0];
 
   const merged = contents
     .map((content) => parseReleaseDocument(content, format))
-    .reduce((accumulated, next) => mergeSections(accumulated, next));
+    .reduce((accumulated, next) => mergeSections(accumulated, next, options));
 
   return serializeReleaseDocument(merged, format);
 }
@@ -84,6 +100,50 @@ export function joinReleaseDocuments(documents: string[], format: ReleaseFormat)
     .map((document) => document.trim())
     .filter(Boolean)
     .join(format === "html" ? "\n<hr>\n" : "\n\n---\n\n");
+}
+
+/** A release note cut where it stops introducing itself. */
+export interface ReleaseOpening {
+  /** The title, the metadata under it, and the summary: everything above the
+   * first section. */
+  opening: string;
+  /** The sections, from the first one to the end of the note. */
+  sections: string;
+}
+
+/**
+ * Cut a release note where its first section begins.
+ *
+ * A note opens by saying which release it is and what that release brought,
+ * and then lists the changes under headings. Promoting several releases as one
+ * merges those lists, but their openings do not merge: each names a version, a
+ * date and an environment of its own. Cutting them apart is what lets the
+ * sections be reused word for word while the opening is written once.
+ *
+ * The note itself says where the cut is: its own top heading level is the
+ * title, and the first heading below that level opens the sections. A note
+ * that never changes level has no title, so it opens at its first heading, and
+ * one that carries a single heading is all opening.
+ */
+export function splitReleaseOpening(content: string, format: ReleaseFormat): ReleaseOpening {
+  const headings = [...content.matchAll(
+    format === "html" ? /^[ \t]*<h([1-6])\b/gim : /^ {0,3}(#{1,6})\s/gm
+  )].map((match) => ({
+    index: match.index,
+    level: format === "html" ? Number(match[1]) : match[1].length,
+  }));
+
+  if (headings.length === 0) return { opening: content, sections: "" };
+
+  const top = Math.min(...headings.map((heading) => heading.level));
+  const first = headings.find((heading) => heading.level > top)
+    ?? (headings.length > 1 ? headings[0] : undefined);
+  if (!first) return { opening: content, sections: "" };
+
+  return {
+    opening: content.slice(0, first.index),
+    sections: content.slice(first.index),
+  };
 }
 
 /** A release note with its repeated lines dropped, and what was dropped. */
@@ -157,7 +217,11 @@ function dedupeSection(
  *
  * Both are left as they were; the result is a new section tree.
  */
-export function mergeSections(target: ReleaseSection, source: ReleaseSection): ReleaseSection {
+export function mergeSections(
+  target: ReleaseSection,
+  source: ReleaseSection,
+  options: ReleaseMergeOptions = {}
+): ReleaseSection {
   const merged: ReleaseSection = {
     level: target.level,
     heading: target.heading,
@@ -166,7 +230,7 @@ export function mergeSections(target: ReleaseSection, source: ReleaseSection): R
   };
 
   for (const block of source.blocks) {
-    addBlock(merged.blocks, block);
+    addBlock(merged.blocks, block, options);
   }
 
   for (const child of source.children) {
@@ -174,7 +238,7 @@ export function mergeSections(target: ReleaseSection, source: ReleaseSection): R
       (candidate) => candidate.level === child.level && sameHeading(candidate.heading, child.heading)
     );
     if (existing >= 0) {
-      merged.children[existing] = mergeSections(merged.children[existing], child);
+      merged.children[existing] = mergeSections(merged.children[existing], child, options);
       continue;
     }
 
@@ -183,7 +247,15 @@ export function mergeSections(target: ReleaseSection, source: ReleaseSection): R
     // covering the whole range, and it takes the name of the newest release in
     // it rather than opening with two titles.
     if (isTitle(merged, child) && isTitle(source, child)) {
-      merged.children[0] = { ...mergeSections(merged.children[0], child), heading: child.heading };
+      merged.children[0] = {
+        ...mergeSections(merged.children[0], child, options),
+        heading: child.heading,
+        // What sits under a title before the first section is that release's
+        // own opening: which environment it went to, when, and a sentence on
+        // what it brought. Three of those in a row is not an opening for the
+        // range they cover, so the newest release's stands for all of them.
+        blocks: child.blocks.map((block) => ({ ...block, items: block.items?.slice() })),
+      };
       continue;
     }
 
@@ -214,18 +286,29 @@ function cloneSection(section: ReleaseSection): ReleaseSection {
 }
 
 /** Add a block to a section, merging it into a list it belongs to. */
-function addBlock(blocks: ReleaseBlock[], block: ReleaseBlock): void {
+function addBlock(
+  blocks: ReleaseBlock[],
+  block: ReleaseBlock,
+  options: ReleaseMergeOptions = {}
+): void {
   if (block.kind === "list") {
     const list = blocks.find(
       (candidate) => candidate.kind === "list" && candidate.ordered === block.ordered
     );
     if (list) {
       const known = new Set((list.items || []).map(comparisonKey));
+      const added: string[] = [];
       for (const item of block.items || []) {
         if (known.has(comparisonKey(item))) continue;
         known.add(comparisonKey(item));
-        list.items = [...(list.items || []), item];
+        added.push(item);
       }
+      // Each release keeps the order its own lines were written in; only where
+      // that release sits among the others is what `leadWith` decides.
+      list.items = options.leadWith === "newest"
+        ? [...added, ...(list.items || [])]
+        : [...(list.items || []), ...added];
+      list.content = list.items.join("\n");
       return;
     }
   }
@@ -396,11 +479,31 @@ const HTML_VOID_ELEMENTS = new Set([
   "link", "meta", "param", "source", "track", "wbr",
 ]);
 
+/**
+ * A note that arrives wrapped in one element of the page, unwrapped.
+ *
+ * A page whose note could only be reached through its own `main` hands back
+ * whatever the template put around it. Left whole, that wrapper is a single
+ * opaque block: none of the headings inside it can be seen, so two releases
+ * merged within it would only be stacked one after the other. Opened, the
+ * headings the model wrote are there to merge on.
+ */
+function unwrapHtmlContainer(html: string): string {
+  const elements = splitHtmlElements(html);
+  if (elements.length !== 1) return html;
+
+  const container = /^<(div|section|main|article)\b[^>]*>([\s\S]*)<\/\1>$/i.exec(elements[0].trim());
+  // Only a wrapper is opened. An element holding no heading of the note's own
+  // is the note's own markup rather than something the page put around it.
+  if (!container || !/<h[1-6]\b/i.test(container[2])) return html;
+  return unwrapHtmlContainer(container[2]);
+}
+
 function parseHtmlDocument(html: string): ReleaseSection {
   const root: ReleaseSection = { level: 0, heading: "", blocks: [], children: [] };
   const open: ReleaseSection[] = [root];
 
-  for (const element of splitHtmlElements(html)) {
+  for (const element of splitHtmlElements(unwrapHtmlContainer(html))) {
     const heading = /^<h([1-6])\b[^>]*>([\s\S]*)<\/h\1>$/i.exec(element.trim());
     if (!heading) {
       open[open.length - 1].blocks.push(toHtmlBlock(element));
@@ -585,10 +688,10 @@ export function replaceReleaseContent(
 }
 
 /**
- * The lines a template puts either side of `{{content}}`, used to find the note.
+ * The text a template puts either side of `{{content}}`, used to find the note.
  *
  * Only the literal text next to the slot can be looked for: everything else in
- * a template is a slot whose value differs from one release to the next. A line
+ * a template is a slot whose value differs from one release to the next. Text
  * that appears more than once in the page is no landmark, and the page is left
  * to the next reader rather than cut at the wrong place.
  */
@@ -599,9 +702,9 @@ function betweenTemplateAnchors(
   const slot = template.indexOf("{{content}}");
   if (slot < 0) return undefined;
 
-  const opening = lastLiteralLine(template.slice(0, slot));
-  const closing = firstLiteralLine(template.slice(slot + "{{content}}".length));
-  if (!isLandmark(page, opening) || !isLandmark(page, closing)) return undefined;
+  const opening = landmark(page, anchorsBefore(template.slice(0, slot)));
+  const closing = landmark(page, anchorsAfter(template.slice(slot + "{{content}}".length)));
+  if (opening === undefined || closing === undefined) return undefined;
 
   const from = page.indexOf(opening);
   const to = page.indexOf(closing, from + opening.length);
@@ -609,20 +712,35 @@ function betweenTemplateAnchors(
   return { start: from + opening.length, end: to, via: "template" };
 }
 
-function isLandmark(page: string, anchor: string): boolean {
-  return anchor.length > 0 && page.indexOf(anchor) === page.lastIndexOf(anchor);
+/** The first anchor the page carries exactly once. */
+function landmark(page: string, anchors: string[]): string | undefined {
+  return anchors.find(
+    (anchor) => page.indexOf(anchor) >= 0 && page.indexOf(anchor) === page.lastIndexOf(anchor)
+  );
 }
 
-/** The last written line before `{{content}}` that no slot can change. */
-function lastLiteralLine(before: string): string {
+/**
+ * What a template writes just before `{{content}}`, the longest run first.
+ *
+ * A closing tag on a line of its own is no landmark — a page is full of them —
+ * so the whole run of literal text is offered before any part of it, and only
+ * shortened, line by line, when the page does not carry it. That is what a page
+ * written by an earlier revision of the template needs: the run has changed,
+ * the lines nearest the note have not.
+ */
+function anchorsBefore(before: string): string[] {
   const lastSlot = before.lastIndexOf("}}");
-  const literal = lastSlot < 0 ? before : before.slice(lastSlot + 2);
-  return literal.split("\n").map((line) => line.trim()).filter(Boolean).at(-1) || "";
+  const lines = (lastSlot < 0 ? before : before.slice(lastSlot + 2)).split("\n");
+  return lines
+    .map((_, index) => lines.slice(index).join("\n"))
+    .filter((anchor) => anchor.trim());
 }
 
-/** The first written line after `{{content}}` that no slot can change. */
-function firstLiteralLine(after: string): string {
+/** What a template writes just after `{{content}}`, the longest run first. */
+function anchorsAfter(after: string): string[] {
   const nextSlot = after.indexOf("{{");
-  const literal = nextSlot < 0 ? after : after.slice(0, nextSlot);
-  return literal.split("\n").map((line) => line.trim()).filter(Boolean)[0] || "";
+  const lines = (nextSlot < 0 ? after : after.slice(0, nextSlot)).split("\n");
+  return lines
+    .map((_, index) => lines.slice(0, lines.length - index).join("\n"))
+    .filter((anchor) => anchor.trim());
 }

@@ -169,8 +169,7 @@ program
   )
   .option("--to <version>", "Current version tag (e.g. v1.1.0)")
   .requiredOption("--env <environment>", "Environment: PROD, STAGING, DEV...")
-  .option("--release-date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
-  .option("--date <value>", 'Alias for --release-date ("now", "tag", or an ISO date)')
+  .option("--date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
   .option("--config <path>", "Path to config file")
   .option("--output <path>", "Output file path (override config)")
@@ -209,7 +208,7 @@ program
         fromVersion,
         toVersion,
         environment: opts.env,
-        releaseDate: opts.releaseDate || opts.date,
+        date: opts.date,
         provider: opts.with,
         configPath: opts.config,
         changelogFile: opts.changelog,
@@ -364,9 +363,9 @@ program
   .option("--to-dir <dir>", "Write the promoted releases to this folder")
   .option("--pattern <pattern>", "File name inside those folders, with {from} and {to}")
   .option("--merge <strategy>", "Several releases into one: sections or concat", "sections")
+  .option("--with <provider>", "LLM provider used to write the opening of a merged range")
   .option("--lang <language>", "Promote one language only")
-  .option("--release-date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
-  .option("--date <value>", 'Alias for --release-date ("now", "tag", or an ISO date)')
+  .option("--date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--config <path>", "Path to config file")
   .option("--dry-run", "Show what would be promoted without writing anything")
   .option("--stdout", "Write the promoted release notes to the terminal without saving files")
@@ -392,8 +391,9 @@ program
         toDir: opts.toDir,
         pattern: opts.pattern,
         merge: opts.merge === "concat" ? "concat" : "sections",
+        provider: opts.with,
         language: opts.lang,
-        releaseDate: opts.releaseDate || opts.date,
+        date: opts.date,
         configPath: opts.config,
       });
 
@@ -416,6 +416,17 @@ program
           `   Skipped ${skipped}: it holds every release, not one per file.`
         ));
       }
+      if (result.plan.segments.length > 1) {
+        printStatus(opts.stdout, chalk.gray("   Sections merged word for word."));
+        // Falling back is not wrong — the newest release's opening is a true
+        // one — but it is narrower than the range, so it is said out loud.
+        printStatus(opts.stdout, result.files.some((file) => file.openingRewritten)
+          ? chalk.gray("   One title and summary written for the range.")
+          : chalk.yellow(
+            `   ⚠️  The ${toVersion} title and summary stand for the whole range: ` +
+            `${result.metadata.openingSkipped || "no opening was written"}.`
+          ));
+      }
 
       if (opts.stdout) {
         console.log(result.files.map((file) => file.content).join("\n\n"));
@@ -425,7 +436,11 @@ program
         for (const file of result.files) {
           printStatus(opts.stdout, chalk.gray(`   ${file.path} ← ${file.sources.join(", ")}`));
         }
-        printStatus(opts.stdout, chalk.gray("\n🤖 No model was called: the wording is the one already reviewed."));
+        printStatus(opts.stdout, chalk.gray(
+          result.metadata.usage.modelCalls === 0
+            ? "\n🤖 No model was called: the wording is the one already reviewed."
+            : "\n🤖 Every section is the wording already reviewed; only the title and summary were written."
+        ));
         return;
       }
 
@@ -451,9 +466,13 @@ program
         onUpdated: printOutputIndexUpdate,
       });
 
+      const { usage } = result.metadata;
       console.log(chalk.gray(
         `\n📊 ${result.plan.segments.length} release${result.plan.segments.length === 1 ? "" : "s"} promoted | ` +
-        `${result.metadata.date} | no model calls`
+        `${result.metadata.date} | ` +
+        (usage.modelCalls === 0
+          ? "no model calls"
+          : `${formatNumber(usage.totalTokens)} tokens | ${usage.modelCalls} model call${usage.modelCalls === 1 ? "" : "s"}`)
       ));
     } catch (err: any) {
       const message = err instanceof PromotionError ? err.message : (err?.message || String(err));
