@@ -1,3 +1,12 @@
+## [0.4.0](https://github.com/tabkram/ai-release-notes/compare/v0.3.0...v0.4.0) (2026-07-26)
+
+### Features
+
+* add `promote` command to reuse release notes across environments ([3c06b81](https://github.com/tabkram/ai-release-notes/commit/3c06b816b442365c82619961959db6d42952a9d7))
+* allow interactive natural language revision of release notes ([b5d8740](https://github.com/tabkram/ai-release-notes/commit/b5d8740445342f48c59391a4ca7b732cdced4de2))
+* allow LLM to write single opening for merged release notes ([379573b](https://github.com/tabkram/ai-release-notes/commit/379573bdc6d157046b39b364406cb700bea47fe2))
+* improve interactive session clarity and save prompting ([c2d7c1f](https://github.com/tabkram/ai-release-notes/commit/c2d7c1f6d12f2f399b1d96b368d187bb27644da6))
+* improve release note comparison robustness and LLM output consistency ([6af4fab](https://github.com/tabkram/ai-release-notes/commit/6af4fab87fba0fbc55c276b5693b97bbad7a4756))
 ## [0.3.0](https://github.com/tabkram/ai-release-notes/compare/v0.2.0...v0.3.0) (2026-07-25)
 
 ### ⚠ BREAKING CHANGES
