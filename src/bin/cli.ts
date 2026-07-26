@@ -8,7 +8,14 @@ import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
 import { RELEASES_MARKER } from "../release.js";
-import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
+import {
+  CONFIG_DIR,
+  DEFAULT_CONFIG_NAME,
+  GLOBAL_CONFIG_PATH,
+  createDefaultConfig,
+  loadConfig,
+  resolveProviderAlias,
+} from "../config.js";
 import {
   ENTRY_TEMPLATE_SEPARATOR,
   unwrapHtmlDocumentCodeFence,
@@ -153,13 +160,11 @@ program
   .option("-g, --global", "Create in home directory (~/.ai-release-notes.yml)")
   .option("-f, --force", "Overwrite existing file")
   .action(async (opts) => {
-    const { homedir } = await import("os");
-    const { resolve } = await import("path");
     const { existsSync } = await import("fs");
 
     const targetPath = opts.global
-      ? resolve(homedir(), ".ai-release-notes.yml")
-      : resolve(process.cwd(), ".ai-release-notes.yml");
+      ? GLOBAL_CONFIG_PATH
+      : resolve(process.cwd(), CONFIG_DIR, DEFAULT_CONFIG_NAME);
 
     if (existsSync(targetPath) && !opts.force) {
       console.log(chalk.yellow("⚠️  Config file already exists. Use --force to overwrite."));

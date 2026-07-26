@@ -51,7 +51,9 @@ API keys are **never** stored in config files. Only the key for the active provi
 npx ai-release-notes init
 ```
 
-This creates `.ai-release-notes.yml` in your project root. **No API keys are stored in this file.**
+This creates `.ai-release-notes/.ai-release-notes.yml`. **No API keys are stored in this file.**
+A bare `.ai-release-notes.yml` at the project root, from before this was the
+default, is still found.
 
 ### 3. Generate release notes
 

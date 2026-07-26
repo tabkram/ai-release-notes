@@ -16,12 +16,12 @@ import {
   type PromptSource,
 } from "./types.js";
 
-const GLOBAL_CONFIG_PATH = resolve(homedir(), ".ai-release-notes.yml");
-const LOCAL_CONFIG_NAMES = [
-  ".ai-release-notes.yml",
-  ".ai-release-notes.yaml",
-  "ai-release-notes.config.yml",
-];
+export const CONFIG_DIR = ".ai-release-notes";
+export const DEFAULT_CONFIG_NAME = ".ai-release-notes.yml";
+export const YAML_CONFIG_NAME = ".ai-release-notes.yaml";
+export const NAMED_CONFIG_NAME = "ai-release-notes.config.yml";
+export const GLOBAL_CONFIG_PATH = resolve(homedir(), DEFAULT_CONFIG_NAME);
+const LOCAL_CONFIG_NAMES = [DEFAULT_CONFIG_NAME, YAML_CONFIG_NAME, NAMED_CONFIG_NAME];
 
 /**
  * Load and validate configuration from file(s).
@@ -167,8 +167,18 @@ function resolvePromptSourcePath(source: PromptSource | undefined, configDir: st
   }
 }
 
+/**
+ * A project's config lives in `.ai-release-notes/` by default, alongside its
+ * instructions and templates. Bare dotfiles at the project root are still
+ * found, so projects created before that directory was the default keep
+ * working unchanged.
+ */
 function findLocalConfig(): string | null {
   const cwd = process.cwd();
+  for (const name of LOCAL_CONFIG_NAMES) {
+    const path = resolve(cwd, CONFIG_DIR, name);
+    if (existsSync(path)) return path;
+  }
   for (const name of LOCAL_CONFIG_NAMES) {
     const path = resolve(cwd, name);
     if (existsSync(path)) return path;
