@@ -24,8 +24,8 @@ jobs:
     # Fork PRs cannot read secrets, so the canary flow is same-repo only.
     if: |
       github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'deploy') &&
       (startsWith(github.head_ref, 'feat/') ||
+       startsWith(github.head_ref, 'feature/') ||
        startsWith(github.head_ref, 'fix/') ||
        startsWith(github.head_ref, 'chore/') ||
        startsWith(github.head_ref, 'ci/'))
