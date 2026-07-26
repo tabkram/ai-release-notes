@@ -249,17 +249,36 @@ export function hasOutputIndexLanguageSwitcher(content: string): boolean {
   return LANGUAGE_SWITCHER.test(content);
 }
 
-/** Render a release note inside an HTML template. */
+export interface ReleaseNoteParams {
+  fromVersion: string;
+  toVersion: string;
+  environment: string;
+  date: string;
+  projectName?: string;
+}
+
+/** Render a release note written in Markdown inside an HTML template. */
 export function renderReleaseNoteHtml(
   template: string,
   content: string,
-  params: {
-    fromVersion: string;
-    toVersion: string;
-    environment: string;
-    date: string;
-    projectName?: string;
-  }
+  params: ReleaseNoteParams
+): string {
+  return renderReleaseNotePage(template, renderMarkdown(content), params);
+}
+
+/**
+ * Put an already rendered release note inside an HTML template.
+ *
+ * The note is markup, so it is placed as it stands. Only a note this tool
+ * rendered itself is ever passed here — one it is putting on a page for the
+ * first time, or one it is reading back off a page it wrote to promote it to
+ * the next environment. Model output and changelog text reach a page through
+ * `renderReleaseNoteHtml`, which escapes them.
+ */
+export function renderReleaseNotePage(
+  template: string,
+  contentHtml: string,
+  params: ReleaseNoteParams
 ): string {
   // One pass over the template, so a `{{slot}}` the model wrote into the note
   // is left where it stands instead of being filled in turn.
@@ -270,7 +289,7 @@ export function renderReleaseNoteHtml(
     environment: escapeHtml(params.environment),
     date: escapeHtml(params.date),
     version: AI_RELEASE_NOTES_VERSION,
-    content: renderMarkdown(content),
+    content: contentHtml,
   });
 }
 

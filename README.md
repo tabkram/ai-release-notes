@@ -145,6 +145,87 @@ date.
 
 ---
 
+## Promoting a release to the next environment
+
+A release note written for QUA has already been read, corrected and agreed on.
+When that same release reaches PROD, nothing about it has changed — so
+`promote` reuses the files QUA already holds instead of asking a model to write
+them again. **No prompt is built and no provider is called**, which is also why
+no API key is needed:
+
+```bash
+# Everything PROD is missing, in one command
+npx ai-release-notes promote --from-env QUA --to-env PROD
+
+# Or one explicit range
+npx ai-release-notes promote --from-env QUA --to-env PROD --from start --to v0.23.0
+```
+
+`ai-release-notes levelup` is the same command.
+
+Each release file names the range it covers, so the files themselves form the
+chain — `start → v0.23.0`, `v0.23.0 → v0.24.0`, and so on. Promoting reads that
+chain rather than the version numbers, so a project that does not release in
+ascending order is followed just as well.
+
+- **One file covers the range** — it is promoted as it stands, word for word.
+- **Several files cover it** — they are merged, oldest first, into the one note
+  that covers the whole range: sections carrying the same heading become one
+  section, their lists become one list, and a line both releases carry is
+  listed once. The merged note takes its title from the newest release in it.
+  `--merge concat` keeps each note whole instead, one after the other.
+
+With no `--from`, promotion starts where the target environment already is, so
+running it twice does nothing the second time. With no `--to`, it goes to the
+newest release the source environment holds. The target environment's output
+index is updated exactly as a generation would update it.
+
+### Where the files are
+
+Promotion reads and writes the paths `output.saveTo` already describes, so a
+layout naming its environment needs nothing else:
+
+```yaml
+output:
+  - format: html
+    saveTo: ./releases/{env}/release-notes_{from}_{to}.html
+```
+
+When each environment lives in a folder that the path does not name, point at
+the folders instead — their names become the environments:
+
+```bash
+npx ai-release-notes promote --from-dir ./releases/env1 --to-dir ./releases/env2
+```
+
+A `saveTo` with neither `{from}` nor `{to}` holds every release in one file
+rather than one release per file, so there is nothing to promote from it; those
+outputs are reported as skipped.
+
+### Promote options
+
+| Option | Description |
+|--------|-------------|
+| `--from-env <env>` | Environment to promote from (default: `--from-dir`'s folder name) |
+| `--to-env <env>` | Environment to promote to (default: `--to-dir`'s folder name) |
+| `--from <version>` | Start of the range (default: where the target environment is) |
+| `--to <version>` | End of the range (default: the newest release in the source) |
+| `--from-dir <dir>` / `--to-dir <dir>` | Read/write the releases in these folders |
+| `--pattern <pattern>` | File name inside those folders (default: the configured one) |
+| `--merge <sections\|concat>` | How several releases become one note (default: `sections`) |
+| `--lang <language>` | Promote one language only |
+| `--release-date <value>` | `now` (default), `tag`, or an ISO date |
+| `--config <path>` | Path to config file |
+| `--dry-run` | Show what would be promoted without writing anything |
+| `--stdout` | Write the promoted notes to the terminal without saving files |
+
+An HTML release note is read back out of the page it was written into and
+rendered into the template again, so the promoted page states its own
+environment, versions and date. A page written through a template this cannot
+read is copied as it stands, which is the whole point of promoting.
+
+---
+
 ## Configuration
 
 `.ai-release-notes.yml` describes your project and where generated files
@@ -330,6 +411,9 @@ travels with the repository. Both are treated as untrusted:
 - **Safe rendering.** Raw HTML in a release note is escaped and link targets are
   limited to `http`, `https`, `mailto`, and relative paths.
 - **Bounded spend.** `git.maxCommits` (default 200) caps one run.
+- **Promotion.** `promote` calls no provider and reuses files this tool already
+  wrote, whose markup was escaped when it was generated; those files are trusted
+  like the rest of your repository.
 - **Endpoint checks.** `baseURL` must be `http`/`https`, and a non-local one
   warns before any prompt leaves the machine.
 
@@ -364,6 +448,35 @@ template, which supplies the page title and footer:
 ```typescript
 markdownToHtml(markdown, { trustedHtml: true });
 ```
+
+`promote(options)` returns the files a promotion would write, without writing
+any of them, so you can review or publish them yourself:
+
+```typescript
+import { promote } from "ai-release-notes";
+
+const { files, plan } = await promote({
+  fromEnvironment: "QUA",
+  toEnvironment: "PROD",
+});
+
+console.log(plan.segments.map((s) => `${s.fromVersion} → ${s.toVersion}`));
+for (const file of files) {
+  console.log(file.path, "←", file.sources);
+}
+```
+
+Each step is exported on its own when you need only part of it:
+
+| Function | What it does |
+|----------|--------------|
+| `discoverReleases(saveTo, values)` | Read a `saveTo` pattern back off disk: which releases exist, and what their paths say about them |
+| `formatOutputPath(saveTo, values)` | Fill `{env}`, `{lang}`, `{from}`, `{to}`; anything not supplied stays a placeholder |
+| `planPromotion({ available, … })` | Chain release files into the run that carries one version to another |
+| `mergeReleaseDocuments(docs, format)` | Merge release notes by section and list, oldest first |
+| `parseReleaseDocument` / `serializeReleaseDocument` | A release note as a section tree, and back again |
+| `extractReleaseContent(page, template?)` | Read a release note back out of the HTML page it was rendered into |
+| `updateOutputIndexes(params)` | Add a release to every configured index, creating the ones that do not exist |
 
 ---
 

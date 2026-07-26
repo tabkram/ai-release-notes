@@ -7,37 +7,32 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
-import {
-  applyOutputIndexLanguageSwitcher,
-  hasOutputIndexLanguageSwitcher,
-  markdownToHtml,
-  outputIndexReleaseId,
-  readLegacyOutputIndexEntries,
-  readOutputIndexReleaseRecords,
-  readOutputIndexReleasesRegion,
-  renderOutputIndexLanguageSwitcher,
-  renderOutputIndexReleases,
-  replaceOutputIndexReleases,
-  upsertOutputIndexReleaseRecord,
-  RELEASES_MARKER,
-  RELEASES_END_MARKER,
-  type OutputIndexEntryTemplate,
-  type OutputIndexLanguageLink,
-  type OutputIndexReleaseRecord,
-} from "../release.js";
+import { RELEASES_MARKER } from "../release.js";
 import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
-import { discoverOutputIndexLanguages } from "../output-index.js";
-import { FIRST_RELEASE, getLatestTag, isFirstRelease } from "../git.js";
+import {
+  ENTRY_TEMPLATE_SEPARATOR,
+  unwrapHtmlDocumentCodeFence,
+  updateOutputIndexes,
+} from "../output-index.js";
+import { formatOutputPath, isReleaseSpecificPath } from "../output-path.js";
+import { promote, PromotionError } from "../promote.js";
+import { FIRST_RELEASE, getLatestTag } from "../git.js";
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
-import { resolve, join, dirname, relative } from "path";
+import { resolve, join, dirname, basename } from "path";
 import clipboardy from "clipboardy";
 import ora from "ora";
-import type { GenerateResult, PromptSource, ProviderConfig, ProviderName, ReleaseNotesConfig } from "../types.js";
+import type {
+  GenerateResult,
+  OutputIndexConfig,
+  PromptSource,
+  ProviderConfig,
+  ProviderName,
+  ReleaseNotesConfig,
+} from "../types.js";
 import { AI_RELEASE_NOTES_VERSION } from "../version.js";
 
 const CLI_VERSION = AI_RELEASE_NOTES_VERSION;
-const LANGUAGE_PATH_PLACEHOLDER = "aireleasenoteslanguageplaceholder";
 const program = new Command();
 
 type OutputTarget = {
@@ -53,21 +48,6 @@ type OutputTarget = {
    */
   ownedByRelease?: boolean;
 };
-
-type OutputIndexTarget = {
-  path: string;
-  groupId: number;
-  language?: string;
-  format: "markdown" | "html";
-  templatePath?: string;
-  entryTemplatePath?: string;
-  templateLanguage: string;
-};
-
-type OutputIndexLanguageTarget = Pick<
-  OutputIndexTarget,
-  "path" | "groupId" | "format" | "templatePath"
-> & { language: string };
 
 function printStatus(stdout: boolean, message: string): void {
   if (stdout) {
@@ -267,11 +247,14 @@ program
           outputTargets = outputConfigs.flatMap((output) => {
             if (!output.saveTo) return [];
             const saveTo = Array.isArray(output.saveTo) ? output.saveTo : [output.saveTo];
+            // A release generated without --to is saved under the name the
+            // config asks for, which is not the tag it was detected as.
+            const versions = { fromVersion: opts.from || FIRST_RELEASE, toVersion: opts.to || "end" };
             return saveTo.flatMap((path) => {
               const ownedByRelease = isReleaseSpecificPath(path);
               return path.includes("{lang}")
                 ? generatedResult.localized.map((release) => ({
-                    path: getOutputPath(path, opts.env, release.language, opts.from, opts.to),
+                    path: formatOutputPath(path, { ...versions, environment: opts.env, language: release.language }),
                     markdown: release.markdown,
                     html: release.html,
                     format: output.format,
@@ -279,7 +262,7 @@ program
                     ownedByRelease,
                   }))
                 : [{
-                    path: getOutputPath(path, opts.env, undefined, opts.from, opts.to),
+                    path: formatOutputPath(path, { ...versions, environment: opts.env }),
                     markdown: generatedResult.markdown,
                     html: generatedResult.html,
                     format: output.format,
@@ -287,77 +270,6 @@ program
                   }];
             });
           });
-        }
-      }
-
-      const outputIndexConfigs = loadedConfig.outputIndex
-        ? (Array.isArray(loadedConfig.outputIndex) ? loadedConfig.outputIndex : [loadedConfig.outputIndex])
-        : [];
-      // An index template is written in the language the release is generated
-      // in, so prompt.languages already answers this.
-      const primaryLanguage = generatedResult.localized[0]?.language ?? "en";
-      const outputIndexTargets: OutputIndexTarget[] = outputIndexConfigs.flatMap((outputIndex, groupId) =>
-        outputIndex.saveTo.includes("{lang}")
-          ? generatedResult.localized.map((release) => ({
-              path: resolve(getOutputPath(outputIndex.saveTo, opts.env, release.language, opts.from, opts.to)),
-              groupId,
-              language: release.language,
-              format: outputIndex.format,
-              templatePath: outputIndex.template,
-              entryTemplatePath: outputIndex.entryTemplate,
-              templateLanguage: primaryLanguage,
-            }))
-          : [{
-              path: resolve(getOutputPath(outputIndex.saveTo, opts.env, undefined, opts.from, opts.to)),
-              groupId,
-              format: outputIndex.format,
-              templatePath: outputIndex.template,
-              entryTemplatePath: outputIndex.entryTemplate,
-              templateLanguage: primaryLanguage,
-            }]
-      );
-      if (outputIndexTargets.some((index) => outputTargets.some((target) => resolve(target.path) === index.path))) {
-        throw new Error("outputIndex.saveTo must be different from every output.saveTo path");
-      }
-      const duplicateIndexPath = outputIndexTargets.find((target, index) =>
-        outputIndexTargets.findIndex(
-          (candidate) => candidate.path.toLowerCase() === target.path.toLowerCase()
-        ) !== index
-      );
-      if (duplicateIndexPath) {
-        throw new Error(
-          `outputIndex.saveTo resolves more than once to ${duplicateIndexPath.path}. ` +
-          `Use distinct paths and language values.`
-        );
-      }
-      const outputIndexLanguageTargets: OutputIndexLanguageTarget[] = outputIndexTargets
-        .flatMap((target) => target.language ? [{ ...target, language: target.language }] : []);
-      for (const [groupId, outputIndex] of outputIndexConfigs.entries()) {
-        if (!outputIndex.saveTo.includes("{lang}")) continue;
-        const patternPath = resolve(getOutputPath(
-          outputIndex.saveTo,
-          opts.env,
-          LANGUAGE_PATH_PLACEHOLDER,
-          opts.from,
-          opts.to
-        ));
-        const discovered = await discoverOutputIndexLanguages(
-          patternPath,
-          LANGUAGE_PATH_PLACEHOLDER
-        );
-        for (const existingIndex of discovered) {
-          const alreadyAvailable = outputIndexLanguageTargets.some((target) =>
-            target.groupId === groupId &&
-            target.path.toLowerCase() === existingIndex.path.toLowerCase()
-          );
-          if (!alreadyAvailable) {
-            outputIndexLanguageTargets.push({
-              ...existingIndex,
-              groupId,
-              format: outputIndex.format,
-              templatePath: outputIndex.template,
-            });
-          }
         }
       }
 
@@ -383,75 +295,36 @@ program
         }
       }
 
-      if (outputIndexTargets.length > 0 && outputTargets.length > 0) {
-        for (const index of outputIndexTargets) {
-          await mkdir(dirname(index.path), { recursive: true });
-          const releasePaths = getReleasePathsForIndex(index, outputTargets);
-          const languageLinks = getOutputIndexLanguageLinks(index, outputIndexLanguageTargets);
-          const outputIndexContent = await createOrUpdateOutputIndex({
-            outputPath: index.path,
-            format: index.format,
-            templatePath: index.templatePath,
-            entryTemplatePath: index.entryTemplatePath,
-            translateTemplate: !opts.dryRun && shouldTranslateTemplate(index.templateLanguage, index.language)
-              ? async (template) => {
-                  const translated = await translateOutputIndexTemplate(
-                    template,
-                    index.language!,
-                    generatedResult.metadata.provider as ProviderName,
-                    loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
-                  );
-                  addTemplateUsage(generatedResult.metadata.usage, translated.usage);
-                  return translated.text;
-              }
-              : undefined,
-            projectName: loadedConfig.projectName,
-            environment: opts.env,
-            language: index.language,
-            fromVersion,
-            toVersion,
-            date: generatedResult.metadata.date,
-            releasePaths,
-            languageLinks,
-          });
-          await writeFile(index.path, outputIndexContent, "utf-8");
-          console.log(chalk.green("📚 Updated output index " + index.path));
-        }
-
-        const currentIndexPaths = new Set(
-          outputIndexTargets.map((target) => target.path.toLowerCase())
-        );
-        for (const existingIndex of outputIndexLanguageTargets) {
-          if (currentIndexPaths.has(existingIndex.path.toLowerCase())) continue;
-
-          const existing = await readFile(existingIndex.path, "utf-8");
-          const languageLinks = getOutputIndexLanguageLinks(
-            existingIndex,
-            outputIndexLanguageTargets
-          );
-          const languageSwitcher = renderOutputIndexLanguageSwitcher(
-            existingIndex.format,
-            languageLinks
-          );
-          const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(existing);
-          let updated = applyOutputIndexLanguageSwitcher(existing, languageSwitcher);
-          if (
-            !hasLanguageSwitcher &&
-            !existingIndex.templatePath &&
-            languageLinks.length > 1 &&
-            existing.includes(RELEASES_MARKER)
-          ) {
-            updated = existing.replace(
-              RELEASES_MARKER,
-              `${languageSwitcher}\n\n${RELEASES_MARKER}`
-            );
-          }
-          if (updated !== existing) {
-            await writeFile(existingIndex.path, updated, "utf-8");
-            console.log(chalk.green("🌐 Refreshed languages in " + existingIndex.path));
-          }
-        }
-      }
+      await updateOutputIndexes({
+        outputIndexes: outputIndexConfigs(loadedConfig),
+        releases: outputTargets,
+        projectName: loadedConfig.projectName,
+        environment: opts.env,
+        fromVersion,
+        toVersion,
+        // A release generated without --to is saved under the name the config
+        // asks for, which is not the tag it was detected as.
+        pathFromVersion: opts.from || FIRST_RELEASE,
+        pathToVersion: opts.to || "end",
+        date: generatedResult.metadata.date,
+        languages: generatedResult.localized.map((release) => release.language),
+        // An index template is written in the language the release is generated
+        // in, so prompt.languages already answers this.
+        primaryLanguage: generatedResult.localized[0]?.language ?? "en",
+        translateTemplate: opts.dryRun
+          ? undefined
+          : async (template, language) => {
+              const translated = await translateOutputIndexTemplate(
+                template,
+                language,
+                generatedResult.metadata.provider as ProviderName,
+                loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
+              );
+              addTemplateUsage(generatedResult.metadata.usage, translated.usage);
+              return translated.text;
+            },
+        onUpdated: printOutputIndexUpdate,
+      });
 
       // Clipboard
       if (opts.clipboard) {
@@ -472,6 +345,117 @@ program
         ? (opts.with ? resolveProviderAlias(opts.with) : config.provider as ProviderName)
         : undefined;
       console.error(chalk.red("\n❌ Error:"), formatGenerationError(err, partialResult, config, providerOverride));
+      process.exit(1);
+    }
+  });
+
+// ── promote ──
+program
+  .command("promote")
+  .alias("levelup")
+  .description("Move release notes from one environment to the next, reusing their wording")
+  .option("--from-env <environment>", "Environment to promote from: QUA, STAGING... (default: --from-dir's name)")
+  .option("--to-env <environment>", "Environment to promote to: PROD, PREPROD... (default: --to-dir's name)")
+  .option("--from <version>", "Start of the range (default: where the target environment is)")
+  .option("--to <version>", "End of the range (default: the newest release in the source)")
+  .option("--from-dir <dir>", "Read the source releases from this folder")
+  .option("--to-dir <dir>", "Write the promoted releases to this folder")
+  .option("--pattern <pattern>", "File name inside those folders, with {from} and {to}")
+  .option("--merge <strategy>", "Several releases into one: sections or concat", "sections")
+  .option("--lang <language>", "Promote one language only")
+  .option("--release-date <value>", 'Release date: "now", "tag", or an ISO date (default: now)')
+  .option("--date <value>", 'Alias for --release-date ("now", "tag", or an ISO date)')
+  .option("--config <path>", "Path to config file")
+  .option("--dry-run", "Show what would be promoted without writing anything")
+  .option("--stdout", "Write the promoted release notes to the terminal without saving files")
+  .action(async (opts) => {
+    try {
+      // A layout that keeps each environment in a folder has already named
+      // them, so the folder answers for the environment when nothing else does.
+      const fromEnvironment = opts.fromEnv || folderName(opts.fromDir);
+      const toEnvironment = opts.toEnv || folderName(opts.toDir);
+      if (!fromEnvironment || !toEnvironment) {
+        throw new PromotionError(
+          "Promoting needs both environments: pass --from-env and --to-env, " +
+          "or --from-dir and --to-dir to take their names from the folders."
+        );
+      }
+
+      const result = await promote({
+        fromEnvironment,
+        toEnvironment,
+        fromVersion: opts.from,
+        toVersion: opts.to,
+        fromDir: opts.fromDir,
+        toDir: opts.toDir,
+        pattern: opts.pattern,
+        merge: opts.merge === "concat" ? "concat" : "sections",
+        language: opts.lang,
+        releaseDate: opts.releaseDate || opts.date,
+        configPath: opts.config,
+      });
+
+      const { fromVersion, toVersion } = result.metadata;
+      if (result.plan.segments.length === 0) {
+        console.log(chalk.yellow(
+          `✅ ${toEnvironment} is already at ${toVersion}. Nothing to promote from ${fromEnvironment}.`
+        ));
+        return;
+      }
+
+      printStatus(opts.stdout, chalk.blue(
+        `🚀 Promoting ${fromEnvironment} → ${toEnvironment}: ${fromVersion} → ${toVersion}`
+      ));
+      for (const segment of result.plan.segments) {
+        printStatus(opts.stdout, chalk.gray(`   ${segment.fromVersion} → ${segment.toVersion}`));
+      }
+      for (const skipped of result.metadata.skipped) {
+        printStatus(opts.stdout, chalk.gray(
+          `   Skipped ${skipped}: it holds every release, not one per file.`
+        ));
+      }
+
+      if (opts.stdout) {
+        console.log(result.files.map((file) => file.content).join("\n\n"));
+      }
+
+      if (opts.dryRun || opts.stdout) {
+        for (const file of result.files) {
+          printStatus(opts.stdout, chalk.gray(`   ${file.path} ← ${file.sources.join(", ")}`));
+        }
+        printStatus(opts.stdout, chalk.gray("\n🤖 No model was called: the wording is the one already reviewed."));
+        return;
+      }
+
+      for (const file of result.files) {
+        await mkdir(dirname(file.path), { recursive: true });
+        const saved = await saveReleaseNotes(file.path, file.content, file.content, file.ownedByRelease);
+        console.log(chalk.green(`${saved === "replaced" ? "💾 Replaced" : "💾 Saved to"} ${file.path}`));
+      }
+
+      const languages = [...new Set(result.files.flatMap((file) => file.language ? [file.language] : []))];
+      await updateOutputIndexes({
+        outputIndexes: outputIndexConfigs(result.config),
+        releases: result.files,
+        projectName: result.config.projectName,
+        environment: toEnvironment,
+        fromVersion,
+        toVersion,
+        date: result.metadata.date,
+        languages: languages.length > 0 ? languages : (result.config.prompt?.languages ?? ["en"]),
+        primaryLanguage: result.config.prompt?.languages?.[0] ?? languages[0] ?? "en",
+        // Promoting calls no model, so an index in a language its template is
+        // not written in keeps the template's own wording.
+        onUpdated: printOutputIndexUpdate,
+      });
+
+      console.log(chalk.gray(
+        `\n📊 ${result.plan.segments.length} release${result.plan.segments.length === 1 ? "" : "s"} promoted | ` +
+        `${result.metadata.date} | no model calls`
+      ));
+    } catch (err: any) {
+      const message = err instanceof PromotionError ? err.message : (err?.message || String(err));
+      console.error(chalk.red("\n❌ Error:"), message);
       process.exit(1);
     }
   });
@@ -498,274 +482,20 @@ program
 
 program.parse();
 
-function getOutputPath(
-  saveTo: string,
-  environment: string,
-  language?: string,
-  fromVersion?: string,
-  toVersion?: string
-): string {
-  const normalizedEnvironment = environment.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
-  const normalizedLanguage = language?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-  return saveTo
-    .replaceAll("{env}", normalizedEnvironment)
-    .replaceAll("{lang}", normalizedLanguage || "{lang}")
-    .replaceAll("{from}", fromVersion || FIRST_RELEASE)
-    .replaceAll("{to}", toVersion || "end");
+/** The name of a folder, used as the environment it holds. */
+function folderName(directory?: string): string | undefined {
+  return directory ? basename(resolve(directory)) : undefined;
 }
 
-/**
- * Whether a `saveTo` pattern resolves to a different file for every release.
- *
- * With a version placeholder each release gets its own file and owns it. Without
- * one, every release resolves to the same path, which is how a cumulative
- * changelog is configured, and there the releases stack up instead.
- */
-function isReleaseSpecificPath(saveTo: string): boolean {
-  return saveTo.includes("{from}") || saveTo.includes("{to}");
+function outputIndexConfigs(config: ReleaseNotesConfig): OutputIndexConfig[] {
+  if (!config.outputIndex) return [];
+  return Array.isArray(config.outputIndex) ? config.outputIndex : [config.outputIndex];
 }
 
-function getReleasePathsForIndex(index: OutputIndexTarget, outputTargets: OutputTarget[]): string[] {
-  const languageTargets = outputTargets.filter(
-    (target) => !index.language || !target.language || target.language === index.language
-  );
-  const preferredFormat = index.format;
-  const preferredTargets = languageTargets.filter(
-    (target) => getOutputFormat(target) === preferredFormat
-  );
-  const selectedTargets = preferredTargets.length > 0
-    ? preferredTargets
-    : languageTargets.filter((target) => getOutputFormat(target) !== preferredFormat);
-
-  return [...new Set(selectedTargets.map((target) => resolve(target.path)))];
-}
-
-function getOutputFormat(target: OutputTarget): "markdown" | "html" {
-  return target.format === "html" ? "html" : "markdown";
-}
-
-function getOutputIndexLanguageLinks(
-  index: Pick<OutputIndexLanguageTarget, "path" | "groupId">,
-  targets: OutputIndexLanguageTarget[]
-): OutputIndexLanguageLink[] {
-  return targets
-    .filter((candidate) => candidate.groupId === index.groupId)
-    .map((candidate) => ({
-      language: candidate.language,
-      href: toRelativeLink(index.path, candidate.path),
-      active: candidate.path.toLowerCase() === index.path.toLowerCase(),
-    }));
-}
-
-async function createOrUpdateOutputIndex(params: {
-  outputPath: string;
-  format: "markdown" | "html";
-  templatePath?: string;
-  entryTemplatePath?: string;
-  translateTemplate?: (template: string) => Promise<string>;
-  projectName?: string;
-  environment: string;
-  language?: string;
-  fromVersion: string;
-  toVersion: string;
-  date: string;
-  releasePaths: string[];
-  languageLinks: OutputIndexLanguageLink[];
-}): Promise<string> {
-  const languageSwitcher = renderOutputIndexLanguageSwitcher(params.format, params.languageLinks);
-  const record: OutputIndexReleaseRecord = {
-    environment: params.environment,
-    fromVersion: params.fromVersion,
-    toVersion: params.toVersion,
-    date: params.date,
-    href: toRelativeLink(params.outputPath, params.releasePaths[0]),
-  };
-  const renderReleases = (
-    records: OutputIndexReleaseRecord[],
-    entryTemplate: OutputIndexEntryTemplate
-  ) => renderOutputIndexReleases({
-    records,
-    entryTemplate,
-    format: params.format,
-    localizeDate: (date) => localizeIndexDate(date, params.language),
-  });
-
-  if (existsSync(params.outputPath)) {
-    const existing = await readFile(params.outputPath, "utf-8");
-    // An index written before the releases were bounded ends its list at the
-    // first thing that follows it, so give it that boundary before reading the
-    // list back out.
-    const normalizedExisting = ensureOutputIndexReleaseBoundary(
-      params.format === "html" ? unwrapHtmlDocumentCodeFence(existing) : existing,
-      params.format
-    );
-    // The entry template is read from its file on every run, so an index never
-    // has to carry a copy of it: editing the file is what changes the shape.
-    const { entryTemplate } = await loadOutputIndexEntryTemplate(params);
-
-    // Every release the index knows is rendered again from its record, so a
-    // template or a language that changed reaches the whole history, not just
-    // the release being added.
-    const region = readOutputIndexReleasesRegion(normalizedExisting);
-    const records = upsertOutputIndexReleaseRecord(
-      readOutputIndexReleaseRecords(region),
-      record
-    );
-    const legacyEntries = readLegacyOutputIndexEntries(
-      region,
-      records.map(outputIndexReleaseId)
-    );
-    const updated = replaceOutputIndexReleases(
-      normalizedExisting,
-      [renderReleases(records, entryTemplate), ...legacyEntries].filter(Boolean).join("\n")
-    );
-
-    const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(updated);
-    const withLanguageSwitcher = applyOutputIndexLanguageSwitcher(updated, languageSwitcher);
-    if (!params.templatePath && params.languageLinks.length > 1 && !hasLanguageSwitcher) {
-      return updated.replace(RELEASES_MARKER, `${languageSwitcher}\n\n${RELEASES_MARKER}`);
-    }
-    return withLanguageSwitcher;
-  }
-
-  const { template, entryTemplate } = await loadOutputIndexEntryTemplate(params);
-  const rendered = renderOutputIndexTemplate(template, {
-    projectName: params.projectName || "Project",
-    environment: params.environment,
-    language: params.language || "",
-    date: localizeIndexDate(params.date, params.language),
-    releases: renderReleases([record], entryTemplate),
-    languages: languageSwitcher,
-    version: CLI_VERSION,
-  }, params.format);
-  if (params.format === "markdown") {
-    return rendered.trim() + "\n";
-  }
-
-  const isHtmlTemplate = !params.templatePath || /\.html?$/i.test(params.templatePath);
-  // An index is assembled here from the template and already-escaped entries,
-  // so its own markup is allowed through. A release note is model output and
-  // never gets that trust.
-  const html = isHtmlTemplate
-    ? rendered
-    : markdownToHtml(rendered, { trustedHtml: true });
-  return html;
-}
-
-/**
- * Joins the summary and the entry template on their way to the translator.
- *
- * It exists for the length of one call: it is never written to a template nor
- * to a generated index.
- */
-const ENTRY_TEMPLATE_SEPARATOR = "__AI_RELEASE_NOTES_PART__";
-
-/**
- * The summary template to render, and the entry shape to list releases with.
- *
- * The entry shape is not configurable, so it never comes from the summary
- * template. Both are translated in one pass, then split apart again: only the
- * summary is rendered, and the entry shape is stored in the index.
- */
-async function loadOutputIndexEntryTemplate(params: {
-  templatePath?: string;
-  entryTemplatePath?: string;
-  format: "markdown" | "html";
-  translateTemplate?: (template: string) => Promise<string>;
-}): Promise<{ template: string; entryTemplate: OutputIndexEntryTemplate }> {
-  const summary = await loadOutputIndexTemplate(params.templatePath, params.format);
-  const entryFile = await loadEntryTemplate(params.entryTemplatePath, params.format);
-  const joined = `${summary}\n${ENTRY_TEMPLATE_SEPARATOR}\n${entryFile}`;
-  const localized = params.translateTemplate
-    ? await params.translateTemplate(joined)
-    : joined;
-
-  // A translation that lost the separator cannot be split back apart. The
-  // summary stays usable; the entry falls back to the file that was sent.
-  const separator = localized.lastIndexOf(ENTRY_TEMPLATE_SEPARATOR);
-  return {
-    template: (separator < 0 ? localized : localized.slice(0, separator)).trimEnd(),
-    entryTemplate: separator < 0
-      ? entryFile.trim()
-      : localized.slice(separator + ENTRY_TEMPLATE_SEPARATOR.length).trim(),
-  };
-}
-
-async function loadEntryTemplate(
-  entryTemplatePath: string | undefined,
-  format: "markdown" | "html"
-): Promise<string> {
-  if (!entryTemplatePath) {
-    return loadBundledTemplate("default-release-summary-entry", format);
-  }
-
-  const resolvedPath = resolve(entryTemplatePath);
-  if (!existsSync(resolvedPath)) {
-    throw new Error(`Output index entry template not found: ${resolvedPath}`);
-  }
-  return readFile(resolvedPath, "utf-8");
-}
-
-async function loadOutputIndexTemplate(
-  templatePath: string | undefined,
-  format: "markdown" | "html"
-): Promise<string> {
-  if (!templatePath) {
-    return loadBundledTemplate("default-release-summary", format);
-  }
-
-  const resolvedTemplatePath = resolve(templatePath);
-  if (!existsSync(resolvedTemplatePath)) {
-    throw new Error(`Output index template not found: ${resolvedTemplatePath}`);
-  }
-  return readFile(resolvedTemplatePath, "utf-8");
-}
-
-function loadBundledTemplate(name: string, format: "markdown" | "html"): Promise<string> {
-  const extension = format === "html" ? "html" : "md";
-  return readFile(resolve(__dirname, `../../templates/${name}.${extension}`), "utf-8");
-}
-
-function renderOutputIndexTemplate(
-  template: string,
-  values: {
-    projectName: string;
-    environment: string;
-    language: string;
-    date: string;
-    releases: string;
-    languages: string;
-    version: string;
-  },
-  format: "markdown" | "html" = "markdown"
-): string {
-  // A project name and an environment reach an HTML index straight from config
-  // and the command line, so they are escaped like every other value there.
-  const value = (raw: string) => (format === "html" ? escapeHtml(raw) : raw);
-  const rendered = template
-    .replaceAll("{{projectName}}", value(values.projectName))
-    .replaceAll("{{environment}}", value(values.environment))
-    .replaceAll("{{language}}", value(values.language))
-    .replaceAll("{{date}}", value(values.date))
-    .replaceAll("{{releases}}", `${values.releases}\n${RELEASES_END_MARKER}`)
-    .replaceAll("{{version}}", value(values.version));
-  return applyOutputIndexLanguageSwitcher(rendered, values.languages);
-}
-
-function localizeIndexDate(date: string, language?: string): string {
-  if (!language) return date;
-  const parsed = new Date(date);
-  if (Number.isNaN(parsed.getTime())) return date;
-  return new Intl.DateTimeFormat(language, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(parsed);
-}
-
-function shouldTranslateTemplate(templateLanguage: string, outputLanguage?: string): boolean {
-  if (!outputLanguage) return false;
-  return languageCode(templateLanguage) !== languageCode(outputLanguage);
+function printOutputIndexUpdate(path: string, change: "release" | "languages"): void {
+  console.log(chalk.green(change === "languages"
+    ? "🌐 Refreshed languages in " + path
+    : "📚 Updated output index " + path));
 }
 
 async function translateOutputIndexTemplate(
@@ -792,15 +522,6 @@ async function translateOutputIndexTemplate(
     throw new Error("Translated output-index template did not preserve its entry template");
   }
   return { text: translated, usage: result.usage };
-}
-
-/** Models occasionally wrap an HTML template in a Markdown code fence. */
-function unwrapHtmlDocumentCodeFence(content: string): string {
-  const openingFence = /^\s*```html?\s*\r?\n(?=\s*<!doctype html|\s*<html\b)/i;
-  if (!openingFence.test(content)) return content;
-  return content
-    .replace(openingFence, "")
-    .replace(/\r?\n```\s*$/, "");
 }
 
 function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
@@ -842,47 +563,6 @@ function addTemplateUsage(
   total.outputTokens += usage.outputTokens;
   total.totalTokens += usage.totalTokens;
   total.modelCalls += 1;
-}
-
-function languageCode(language: string): string {
-  return language.toLowerCase().split(/[-_]/, 1)[0];
-}
-
-function ensureOutputIndexReleaseBoundary(
-  content: string,
-  format: "markdown" | "html"
-): string {
-  if (!content.includes(RELEASES_MARKER) || content.includes(RELEASES_END_MARKER)) {
-    return content;
-  }
-
-  const releasesStart = content.indexOf(RELEASES_MARKER) + RELEASES_MARKER.length;
-  const boundary = [
-    format === "html"
-      ? content.indexOf("</main>", releasesStart)
-      : content.indexOf("\n---\n", releasesStart),
-  ].filter((index) => index >= 0)[0];
-
-  if (boundary === undefined) {
-    return `${content.trimEnd()}\n${RELEASES_END_MARKER}\n`;
-  }
-  return `${content.slice(0, boundary).trimEnd()}\n${RELEASES_END_MARKER}\n${content.slice(boundary).replace(/^\n/, "")}`;
-}
-
-function toRelativeLink(fromPath: string, toPath: string): string {
-  return relative(dirname(fromPath), toPath)
-    .replaceAll("\\", "/")
-    .split("/")
-    .map((segment) => segment === "." || segment === ".." ? segment : encodeURIComponent(segment))
-    .join("/");
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function formatNumber(value: number): string {

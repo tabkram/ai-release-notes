@@ -229,3 +229,36 @@ The slots filled in a page template are `{{content}}`, `{{projectName}}`,
 `{{fromVersion}}`, `{{toVersion}}`, `{{environment}}`, `{{date}}` and
 `{{version}}`. Anything else is left exactly as written, so the page title
 belongs in the template's own `<title>`.
+
+## 7. Move a release to the next environment
+
+Generating is for a release nobody has read yet. Once QUA's notes have been
+read and corrected, PROD gets the same words rather than new ones:
+
+```bash
+npx ai-release-notes promote --from-env QUA --to-env PROD
+```
+
+No prompt is built and no provider is called, so no API key is needed. With the
+layout from step 4, the QUA files are found by their names, the range PROD is
+missing is worked out from them, and the PROD files and index are written.
+
+If PROD is several releases behind, every release in between comes along and
+the notes are merged into the one note covering the whole range: sections
+carrying the same heading become one section, their lists become one list, and
+a line two releases share is listed once. `--merge concat` keeps each note
+whole instead.
+
+`--dry-run` shows the plan — which releases would be taken, into which files —
+without writing anything:
+
+```bash
+npx ai-release-notes promote --from-env QUA --to-env PROD --dry-run
+```
+
+When each environment lives in its own folder and the path does not name it,
+name the folders instead:
+
+```bash
+npx ai-release-notes promote --from-dir ./releases/env1 --to-dir ./releases/env2
+```

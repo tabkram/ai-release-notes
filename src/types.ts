@@ -115,6 +115,9 @@ export const OutputIndexesConfigSchema = z.union([
   z.array(OutputIndexConfigSchema).min(1),
 ]);
 
+export type OutputConfig = z.infer<typeof OutputConfigSchema>;
+export type OutputIndexConfig = z.infer<typeof OutputIndexConfigSchema>;
+
 export const ReleaseNotesConfigSchema = z.object({
   projectName: z.string().min(1).optional(),
   provider: z.string().default("openai"),

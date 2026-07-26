@@ -49,6 +49,15 @@ Release notes are model output, so raw HTML in them is escaped and link targets
 are restricted to `http`, `https`, `mailto`, and relative paths. Scripting
 schemes such as `javascript:` are rendered as plain text.
 
+### Promoted releases
+
+`promote` calls no provider: it moves release files this tool already wrote from
+one environment to the next. Their markup was escaped when it was generated, and
+is placed on the promoted page as it stands rather than escaped a second time —
+so the files under `output.saveTo` are trusted to the same degree as the rest of
+the repository they live in. A release note edited by hand after generation is
+promoted with those edits, markup included.
+
 ### Spend
 
 `git.maxCommits` (default 200) bounds how many commits one run sends to a paid
