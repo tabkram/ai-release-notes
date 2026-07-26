@@ -71,3 +71,37 @@ Local Ollama needs no API key.
 3. Start Ollama (the default address is `http://localhost:11434`) and use `--with ollama`.
 
 For hosted Ollama Cloud, set `OLLAMA_API_KEY` as provided by the service. See the [Ollama documentation](https://github.com/ollama/ollama).
+
+## Setting environment variables
+
+**macOS / Linux:**
+```bash
+export OPENAI_API_KEY=sk-...
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+```
+
+**Windows (CMD):**
+```cmd
+set OPENAI_API_KEY=sk-...
+```
+
+**`.env` file (with dotenv):**
+```bash
+# Install dotenv-cli
+npm install -g dotenv-cli
+
+# Run with env file
+dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD
+```
+
+In CI, pass the key as a secret instead — see [CI/CD integration](ci-cd.md).
+
+## Which provider is used
+
+`provider` in `.ai-release-notes.yml` sets the default; `--with <alias>` overrides
+it for one run. `npx ai-release-notes providers` lists the aliases and their
+default models.
