@@ -88,6 +88,8 @@ export {
   buildUserPrompt,
   buildEditSystemPrompt,
   buildEditUserPrompt,
+  buildIndexEditSystemPrompt,
+  buildIndexEditUserPrompt,
   buildSessionRouterSystemPrompt,
   buildSessionRouterUserPrompt,
   resolveInstructions,

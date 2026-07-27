@@ -533,7 +533,14 @@ export function unwrapHtmlDocumentCodeFence(content: string): string {
     .replace(/\r?\n```\s*$/, "");
 }
 
-function ensureOutputIndexReleaseBoundary(
+/**
+ * Give an index whose list runs to the end of the page a boundary to end at.
+ *
+ * An index written before the list was bounded carries only its opening marker,
+ * so everything after it — a footer, a closing rule — reads as part of the list.
+ * Closing it is what tells a run, and a revision, where the releases stop.
+ */
+export function ensureOutputIndexReleaseBoundary(
   content: string,
   format: "markdown" | "html"
 ): string {

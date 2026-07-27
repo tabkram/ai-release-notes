@@ -33,7 +33,8 @@ that you are done — so "put that back", "actually leave it", and "that's all"
 all work.
 
 Without `--from` and `--to`, every release note the environment holds is opened
-at once, and each request is applied to all of them.
+at once — along with the index listing them — and each request is applied to all
+of them.
 
 - **Nothing is written until you say so.** Each request shows what it changed,
   line by line, and the files stay as they were until you ask for them to be
@@ -41,8 +42,34 @@ at once, and each request is applied to all of them.
 - **Repeated lines are compared, not rewritten.** Asking for exact duplicates to
   go calls no model at all: the lines are compared here, the first of each stays
   where you meet it, and a section left empty goes with them.
-- **A revision changes what a note says, never which release it is**, so the
-  release index still describes it and is left alone.
+- **A request reaches whatever it is about.** One about a section finds the notes
+  that have one; one about the list of releases finds the index. Neither is read
+  as if it were the other, and a file a request does not reach is left as it was,
+  word for word.
+
+## The index listing your releases
+
+An [`outputIndex`](configuration.md) names no version, so a range asks for one
+release's own note and leaves it out. Open an environment without one and the
+index is open too, for the requests a list takes rather than a note:
+
+```
+› only keep the last five releases on the index
+› put the oldest release first
+› group them under a heading per year
+› say "security release" under v1.26.0
+› drop v1.25.7 from the list, it was rolled back
+```
+
+Only the releases the index lists are ever sent or replaced — the page keeps its
+heading, its language switcher and its footer. Each listed release carries a
+marker that says which release it is, so a request may drop a release along with
+its marker, and an answer that wrote, repeated or edited one is reported and the
+file left alone: an index cannot gain a release nobody released.
+
+A later `generate` run renders each listed release from its own marker again. An
+order you asked for survives it; wording you changed on an entry does not, since
+the run rewrites every entry from the template.
 
 ## In CI
 

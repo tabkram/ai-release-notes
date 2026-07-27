@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { loadReleaseNoteTemplate } from "../src/generator.js";
 import { PromptSession, readSessionAction, type EditModelCall } from "../src/prompt-session.js";
 import { dedupeReleaseDocument, replaceReleaseContent } from "../src/release-document.js";
-import { renderReleaseNoteHtml, sanitizeReleaseHtml } from "../src/release.js";
+import {
+  readOutputIndexReleaseMarkers,
+  renderReleaseNoteHtml,
+  sanitizeReleaseHtml,
+  sanitizeReleaseIndexHtml,
+} from "../src/release.js";
 import { changedLines } from "../src/text-diff.js";
 
 // ─────────────────────────────────────────
@@ -40,10 +45,16 @@ async function writeRelease(path: string, content: string): Promise<void> {
   await writeFile(path, content, "utf-8");
 }
 
-/** The release note a revision request carries, as the model would read it. */
+/**
+ * The material a revision request carries, as the model would read it.
+ *
+ * A release note and an index's list travel in blocks of their own, so the one
+ * a request actually carries is the one read back.
+ */
 function noteFrom(userPrompt: string): string {
-  const opening = userPrompt.indexOf("===== BEGIN RELEASE NOTE");
-  const closing = userPrompt.indexOf("===== END RELEASE NOTE");
+  const block = userPrompt.includes("===== BEGIN RELEASE LIST") ? "RELEASE LIST" : "RELEASE NOTE";
+  const opening = userPrompt.indexOf(`===== BEGIN ${block}`);
+  const closing = userPrompt.indexOf(`===== END ${block}`);
   return userPrompt.slice(userPrompt.indexOf("\n", opening) + 1, closing).trim();
 }
 
@@ -105,6 +116,41 @@ This release adds exports.
 
 - Updated the Docker base image to node:22
 `;
+
+/** One listed release, as a generation writes it: its marker, then its entry. */
+function indexEntry(from: string, to: string, date: string): string {
+  const record = { environment: "PRD", fromVersion: from, toVersion: to, date, href: `release-notes_${from}_${to}.md` };
+  return `<!-- ai-release-notes:release ${JSON.stringify(record)} -->
+## Release ${to}
+
+_PRD · ${date} · Changes since ${from}_
+
+[Read release notes →](${record.href})
+`;
+}
+
+const INDEX = `# Test Platform release notes
+
+A concise release history for PRD. The newest release is listed first.
+
+<!-- ai-release-notes:releases -->
+${indexEntry("v1.1.0", "v1.2.0", "2026-06-10")}${indexEntry("v1.0.0", "v1.1.0", "2026-06-03")}<!-- ai-release-notes:/releases -->
+
+---
+_Generated with [tabkram/ai-release-notes](https://github.com/tabkram/ai-release-notes)._
+`;
+
+/** A config whose environment holds release notes and one index listing them. */
+async function writeIndexConfig(directory: string): Promise<string> {
+  return writeConfig(directory, [
+    "output:",
+    "  - format: markdown",
+    `    saveTo: ${join(directory, "{env}", "release-notes_{from}_{to}.md")}`,
+    "outputIndex:",
+    "  format: markdown",
+    `  saveTo: ${join(directory, "{env}", "index.md")}`,
+  ]);
+}
 
 // ─────────────────────────────────────────
 // Opening a session
@@ -451,6 +497,125 @@ test("reduces a revised page to the markup a release note is made of", () => {
   assert.equal(sanitizeReleaseHtml("<ul class=\"x\"><li>Kept</li></ul>"), "<ul class=\"x\"><li>Kept</li></ul>");
   // An unclosed scripting element still loses its tag.
   assert.equal(sanitizeReleaseHtml("<script>alert(1)"), "alert(1)");
+});
+
+// ─────────────────────────────────────────
+// The index listing every release
+// ─────────────────────────────────────────
+
+test("opens the release index when no version is named, and leaves it out of a range", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeIndexConfig(directory);
+    await writeRelease(join(directory, "PRD", "release-notes_v1.0.0_v1.1.0.md"), NOTE);
+    await writeRelease(join(directory, "PRD", "index.md"), INDEX);
+
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: fakeModel({}).call,
+    });
+    assert.deepEqual(
+      session.documents.map((document) => document.kind).sort(),
+      ["index", "release"]
+    );
+
+    // A range asks for one release's own note, and an index names no version.
+    const ranged = await PromptSession.open({
+      environment: "PRD",
+      fromVersion: "v1.0.0",
+      configPath,
+      callModel: fakeModel({}).call,
+    });
+    assert.deepEqual(ranged.documents.map((document) => document.kind), ["release"]);
+  });
+});
+
+test("revises the list of releases and leaves the page around it standing", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeIndexConfig(directory);
+    // An index whose list was never closed: the footer still stays out of it.
+    await writeRelease(
+      join(directory, "PRD", "index.md"),
+      INDEX.replace("<!-- ai-release-notes:/releases -->\n", "")
+    );
+
+    // Keep the newer release, drop the older one, marker and all.
+    const model = fakeModel({
+      edit: (list) => list.slice(0, list.indexOf("<!-- ai-release-notes:release", 1)).trim(),
+    });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+
+    const result = await session.revise("only keep the latest release");
+    assert.equal(result.edits[0].changed, true);
+    await session.save();
+
+    // The model is handed the listed releases, never the page carrying them.
+    assert.match(model.revised[0], /Release v1\.2\.0/);
+    assert.doesNotMatch(model.revised[0], /release history for PRD/);
+    assert.doesNotMatch(model.revised[0], /Generated with/);
+
+    const written = await readFile(join(directory, "PRD", "index.md"), "utf-8");
+    assert.match(written, /Release v1\.2\.0/);
+    assert.doesNotMatch(written, /Release v1\.1\.0/);
+    // The heading above the list and the footer below it are nobody's release.
+    assert.match(written, /release history for PRD/);
+    assert.match(written, /Generated with/);
+    // The release that stayed keeps the marker a later run recognizes it by.
+    assert.equal(readOutputIndexReleaseMarkers(written).length, 1);
+  });
+});
+
+test("leaves the index alone when an answer edits the markers", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeIndexConfig(directory);
+    await writeRelease(join(directory, "PRD", "index.md"), INDEX);
+
+    // A release nobody released, carrying a marker nobody generated.
+    const invented = '<!-- ai-release-notes:release {"environment":"PRD",' +
+      '"fromVersion":"v1.2.0","toVersion":"v9.9.9","date":"2026-07-01",' +
+      '"href":"release-notes_v1.2.0_v9.9.9.md"} -->\n## Release v9.9.9';
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: fakeModel({ edit: (list) => `${invented}\n${list}` }).call,
+    });
+
+    const result = await session.revise("add the upcoming release");
+    assert.equal(result.edits[0].changed, false);
+    assert.match(result.edits[0].skipped ?? "", /markers that identify each listed release/);
+    assert.equal(session.pending().length, 0);
+  });
+});
+
+test("a de-duplication passes the index by", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeIndexConfig(directory);
+    await writeRelease(join(directory, "PRD", "index.md"), INDEX);
+
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: fakeModel({}).call,
+    });
+
+    const result = session.dedupe();
+    assert.equal(result.edits[0].changed, false);
+    assert.match(result.edits[0].skipped ?? "", /not to the release index/);
+  });
+});
+
+test("keeps a listed release's marker while reducing the markup around it", () => {
+  const marker = '<!-- ai-release-notes:release {"environment":"PRD"} -->';
+  assert.equal(
+    sanitizeReleaseIndexHtml(`${marker}<script>alert(1)</script><p>Kept</p>`),
+    `${marker}<p>Kept</p>`
+  );
+  // Every other comment is markup the list has no use for.
+  assert.equal(sanitizeReleaseIndexHtml("<!-- hidden --><p>Kept</p>"), "<p>Kept</p>");
 });
 
 // ─────────────────────────────────────────

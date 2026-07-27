@@ -30,10 +30,13 @@ import {
 import {
   buildEditSystemPrompt,
   buildEditUserPrompt,
+  buildIndexEditSystemPrompt,
+  buildIndexEditUserPrompt,
   buildSessionRouterSystemPrompt,
   buildSessionRouterUserPrompt,
   resolveInstructions,
 } from "./prompts/builder.js";
+import { ensureOutputIndexReleaseBoundary } from "./output-index.js";
 import { compareVersions } from "./promote.js";
 import {
   dedupeReleaseDocument,
@@ -41,8 +44,15 @@ import {
   replaceReleaseContent,
   type ReleaseFormat,
 } from "./release-document.js";
-import { sanitizeReleaseHtml } from "./release.js";
-import type { GenerationUsage, ProviderName, ReleaseNotesConfig } from "./types.js";
+import {
+  readOutputIndexReleaseMarkers,
+  readOutputIndexReleasesRegion,
+  replaceOutputIndexReleases,
+  sanitizeReleaseHtml,
+  sanitizeReleaseIndexHtml,
+  RELEASES_MARKER,
+} from "./release.js";
+import type { GenerationUsage, OutputIndexConfig, ProviderName, ReleaseNotesConfig } from "./types.js";
 
 export class PromptError extends Error {
   constructor(message: string) {
@@ -87,6 +97,12 @@ export interface PromptDocument {
   template?: string;
   /** Why this file cannot be revised, when it cannot. */
   unrevisable?: string;
+  /**
+   * Whether a request revises one release's own note, or the index listing
+   * every release of an environment. The two are asked for the same way, but
+   * neither is read as if it were the other.
+   */
+  kind: "release" | "index";
 }
 
 /** What one request did to one file. */
@@ -153,6 +169,10 @@ interface FoundFile {
 
 const UNREADABLE_PAGE =
   "its release note cannot be told apart from the page around it — revise the Markdown output instead";
+const UNREADABLE_INDEX =
+  "its list of releases cannot be found on the page — check that the outputIndex template still carries the releases marker";
+const ALTERED_MARKERS =
+  "the answer edited the markers that identify each listed release, so the file was left as it was";
 
 /**
  * The release notes of one environment, open for revision.
@@ -190,7 +210,10 @@ export class PromptSession {
     const outputs = config.output
       ? (Array.isArray(config.output) ? config.output : [config.output])
       : [];
-    if (outputs.length === 0) {
+    const outputIndexes: OutputIndexConfig[] = config.outputIndex
+      ? (Array.isArray(config.outputIndex) ? config.outputIndex : [config.outputIndex])
+      : [];
+    if (outputs.length === 0 && outputIndexes.length === 0) {
       throw new PromptError(
         "Revising reuses the files a generation wrote, so it needs to know where they are. " +
         "Add an output with a saveTo path to your config."
@@ -210,8 +233,18 @@ export class PromptSession {
         for (const found of await findFiles(pattern, options, config)) {
           // Two configured outputs can name one file; it is opened once.
           if (documents.some((document) => document.path === found.path)) continue;
-          documents.push(await readDocument(found, output.format, template));
+          documents.push(await readDocument(found, output.format, template, "release"));
         }
+      }
+    }
+
+    // An index names no version, so the same rule that applies to any other
+    // versionless output applies to it: narrowing the session to a range
+    // leaves it out, since a range asks for one release's own note.
+    for (const outputIndex of outputIndexes) {
+      for (const found of await findFiles(outputIndex.saveTo, options, config)) {
+        if (documents.some((document) => document.path === found.path)) continue;
+        documents.push(await readDocument(found, outputIndex.format, undefined, "index"));
       }
     }
 
@@ -290,9 +323,11 @@ export class PromptSession {
 
     const startedAt = Date.now();
     const usage = emptyUsage();
-    const system = await buildEditSystemPrompt(
+    const releaseSystem = await buildEditSystemPrompt(
       await resolveInstructions(this.config.prompt?.instructions)
     );
+    // Built only if an index is actually open: most sessions have none.
+    let indexSystem: string | undefined;
 
     const edits: PromptEdit[] = [];
     const revised = new Map<string, string>();
@@ -306,25 +341,37 @@ export class PromptSession {
 
       const note = noteOf(document);
       if (note === undefined) {
-        edits.push(unchanged(document, document.unrevisable ?? UNREADABLE_PAGE));
+        edits.push(unchanged(document, document.unrevisable ?? (document.kind === "index" ? UNREADABLE_INDEX : UNREADABLE_PAGE)));
         continue;
       }
 
       let answer: LLMCallResult;
       try {
-        answer = await this.callModel({
-          system,
-          user: buildEditUserPrompt({
-            instruction: request,
-            document: note,
-            format: document.format,
-            projectName: this.config.projectName,
-            environment: this.environment,
-            fromVersion: document.fromVersion,
-            toVersion: document.toVersion,
-            language: document.language,
-          }),
-        });
+        answer = document.kind === "index"
+          ? await this.callModel({
+              system: indexSystem ??= await buildIndexEditSystemPrompt(),
+              user: buildIndexEditUserPrompt({
+                instruction: request,
+                document: note,
+                format: document.format,
+                projectName: this.config.projectName,
+                environment: this.environment,
+                language: document.language,
+              }),
+            })
+          : await this.callModel({
+              system: releaseSystem,
+              user: buildEditUserPrompt({
+                instruction: request,
+                document: note,
+                format: document.format,
+                projectName: this.config.projectName,
+                environment: this.environment,
+                fromVersion: document.fromVersion,
+                toVersion: document.toVersion,
+                language: document.language,
+              }),
+            });
       } catch (error) {
         failed = true;
         edits.push(unchanged(document, error instanceof Error ? error.message : String(error)));
@@ -357,6 +404,9 @@ export class PromptSession {
    * Comparing lines is something this can do exactly, so it does it itself: no
    * request is built, no provider is called, and what comes back is the note
    * minus the lines it repeated, never a rewording of the ones it keeps.
+   *
+   * An index is not one note repeating itself: it is many, each listed once
+   * already, so it has nothing here to drop and is left out of this pass.
    */
   dedupe(): PromptEditResult {
     const startedAt = Date.now();
@@ -365,6 +415,11 @@ export class PromptSession {
     const revised = new Map<string, string>();
 
     for (const document of this.documents) {
+      if (document.kind === "index") {
+        edits.push(unchanged(document, "deduplication applies to release notes, not to the release index"));
+        continue;
+      }
+
       const note = noteOf(document);
       if (note === undefined) {
         edits.push(unchanged(document, document.unrevisable ?? UNREADABLE_PAGE));
@@ -437,17 +492,29 @@ export class PromptSession {
    * published page, so it is reduced to the markup a release note is made of
    * first: the note the model was given was itself written from changelog text
    * nobody reviewed.
+   *
+   * An index's list is held to one thing more. Its entries carry the markers a
+   * later run recognizes each release by, so an answer may drop a marker along
+   * with the release it opens, and may never write, repeat or edit one — an
+   * index that gained a marker nobody generated would list a release that was
+   * never released.
    */
   private applyAnswer(
     document: PromptDocument,
     answer: string
   ): string | { skipped: string } {
-    const revised = document.format === "html"
-      ? sanitizeReleaseHtml(stripEnclosingCodeFence(answer)).trim()
-      : stripEnclosingCodeFence(answer).trim();
+    const fenceless = stripEnclosingCodeFence(answer);
+    const revised = document.format !== "html"
+      ? fenceless.trim()
+      : document.kind === "index"
+        ? sanitizeReleaseIndexHtml(fenceless).trim()
+        : sanitizeReleaseHtml(fenceless).trim();
 
     if (!revised) {
       return { skipped: "the model answered with nothing, so the file was left as it was" };
+    }
+    if (document.kind === "index" && !keepsItsMarkers(noteOf(document) ?? "", revised)) {
+      return { skipped: ALTERED_MARKERS };
     }
 
     const written = withNote(document, revised);
@@ -569,9 +636,15 @@ function covers(
 async function readDocument(
   found: FoundFile,
   format: ReleaseFormat,
-  template?: string
+  template: string | undefined,
+  kind: "release" | "index"
 ): Promise<PromptDocument> {
-  const content = await readFile(found.path, "utf-8");
+  const file = await readFile(found.path, "utf-8");
+  // An index whose list was never closed runs to the end of the page, footer
+  // and all. Closing it is how a run reads the list back, so a revision reads
+  // it the same way — and the boundary reaches the file only if something else
+  // about the list changes too.
+  const content = kind === "index" ? ensureOutputIndexReleaseBoundary(file, format) : file;
   const document: PromptDocument = {
     path: found.path,
     format,
@@ -581,9 +654,12 @@ async function readDocument(
     saved: content,
     content,
     template,
+    kind,
   };
 
-  if (noteOf(document) === undefined) document.unrevisable = UNREADABLE_PAGE;
+  if (noteOf(document) === undefined) {
+    document.unrevisable = kind === "index" ? UNREADABLE_INDEX : UNREADABLE_PAGE;
+  }
   return document;
 }
 
@@ -597,8 +673,16 @@ async function readDocument(
  * A Markdown output is the release note; an HTML output is a whole page, and
  * only the note on it is ever sent or replaced, so the page keeps its head, its
  * styles, its footer and the values the template filled in when it was written.
+ *
+ * An index is never only its list either: only the region its release markers
+ * bound is sent, whatever format the page around it is written in.
  */
 function noteOf(document: PromptDocument): string | undefined {
+  if (document.kind === "index") {
+    return document.content.includes(RELEASES_MARKER)
+      ? readOutputIndexReleasesRegion(document.content).trim()
+      : undefined;
+  }
   if (document.format !== "html") return document.content;
   // Reading the note is not enough: it has to be possible to put one back.
   return replaceReleaseContent(document.content, "", document.template) === undefined
@@ -606,11 +690,27 @@ function noteOf(document: PromptDocument): string | undefined {
     : extractReleaseContent(document.content, document.template);
 }
 
-/** The file as it reads once its release note is revised. */
+/** The file as it reads once its release note, or its list of releases, is revised. */
 function withNote(document: PromptDocument, note: string): string | undefined {
+  if (document.kind === "index") return replaceOutputIndexReleases(document.content, note.trim());
   return document.format === "html"
     ? replaceReleaseContent(document.content, note, document.template)
     : `${note.trim()}\n`;
+}
+
+/**
+ * Whether a revised list still stands for the releases it was given.
+ *
+ * Dropping a release drops its marker, which is a revision anyone may ask for.
+ * Everything else is a marker the list did not have: one written from nothing,
+ * one repeated so a later run lists its release twice, or one whose values were
+ * edited so it no longer names the release its entry describes.
+ */
+function keepsItsMarkers(before: string, after: string): boolean {
+  const original = readOutputIndexReleaseMarkers(before);
+  const revised = readOutputIndexReleaseMarkers(after);
+  return new Set(revised).size === revised.length
+    && revised.every((marker) => original.includes(marker));
 }
 
 function unchanged(document: PromptDocument, skipped: string): PromptEdit {

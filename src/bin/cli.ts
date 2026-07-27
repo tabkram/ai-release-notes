@@ -753,13 +753,20 @@ function printVerbosePromptDetails(stdout: boolean, session: PromptSession): voi
 }
 
 function printOpenDocuments(session: PromptSession, stdout = false): void {
-  const count = session.documents.length;
-  printStatus(stdout, chalk.blue(
-    `\n📝 ${count} release note${count === 1 ? "" : "s"} open for ${session.environment}`
-  ));
+  const notes = session.documents.filter((document) => document.kind === "release").length;
+  const indexes = session.documents.length - notes;
+  // An index names no version, so a line saying only how many files are open
+  // would leave whoever asked wondering which release the extra one is.
+  const opened = [
+    `${notes} release note${notes === 1 ? "" : "s"}`,
+    indexes > 0 ? `${indexes} release index${indexes === 1 ? "" : "es"}` : "",
+  ].filter(Boolean).join(" and ");
+  printStatus(stdout, chalk.blue(`\n📝 ${opened} open for ${session.environment}`));
 
   for (const document of session.documents) {
-    const range = [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
+    const range = document.kind === "index"
+      ? "every release listed"
+      : [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
     const language = document.language ? ` [${document.language}]` : "";
     const pending = document.content !== document.saved ? chalk.yellow(" (changed)") : "";
     printStatus(stdout,
