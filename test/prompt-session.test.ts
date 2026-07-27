@@ -7,6 +7,7 @@ import { loadReleaseNoteTemplate } from "../src/generator.js";
 import { PromptSession, readSessionAction, type EditModelCall } from "../src/prompt-session.js";
 import { dedupeReleaseDocument, replaceReleaseContent } from "../src/release-document.js";
 import {
+  readOutputIndexReleaseRecords,
   readOutputIndexReleaseMarkers,
   renderReleaseNoteHtml,
   sanitizeReleaseHtml,
@@ -64,34 +65,81 @@ interface FakeModel {
   revised: string[];
   /** The messages it was asked to place, in order. */
   routed: string[];
+  /** Primary-evidence questions, before any large-answer synthesis. */
+  answered: string[];
+  /** Final answer calls that combine independently grounded findings. */
+  synthesized: string[];
+  /** Calls that write only the opening of a structurally merged note. */
+  merged: string[];
 }
 
 /**
  * A model that answers without a provider.
  *
- * Both kinds of call reach one function, so a test that never routes anything
- * still fails loudly if the session routes behind its back.
+ * Every session role reaches one function. Classifying by the role-specific
+ * system contract makes tests fail loudly if planning, answering, synthesis,
+ * merge-opening, and editing are accidentally substituted for one another.
  */
 function fakeModel(answers: {
-  route?: unknown;
+  route?: unknown | ((prompt: string, index: number) => unknown);
+  answer?: string | ((prompt: string, index: number) => string);
+  synthesis?: string | ((prompt: string, index: number) => string);
+  merge?: string | ((prompt: string, index: number) => string);
   edit?: (note: string) => string;
 }): FakeModel {
   const model: FakeModel = {
     revised: [],
     routed: [],
-    call: async ({ user }) => {
+    answered: [],
+    synthesized: [],
+    merged: [],
+    call: async ({ system, user }) => {
       const usage = { inputTokens: 10, outputTokens: 20, totalTokens: 30 };
 
-      if (user.includes("===== BEGIN MESSAGE =====")) {
+      if (system.includes("# Placing a message")) {
         model.routed.push(user);
+        const route = typeof answers.route === "function"
+          ? answers.route(user, model.routed.length - 1)
+          : answers.route;
         return {
-          text: typeof answers.route === "string"
-            ? answers.route
-            : JSON.stringify(answers.route ?? { action: "revise", instruction: "revise it" }),
+          text: typeof route === "string"
+            ? route
+            : JSON.stringify(route ?? { action: "revise", instruction: "revise it" }),
           usage,
         };
       }
 
+      if (system.includes("# Answering a question")) {
+        if (user.includes("===== BEGIN GROUNDED FINDINGS")) {
+          model.synthesized.push(user);
+          const reply = typeof answers.synthesis === "function"
+            ? answers.synthesis(user, model.synthesized.length - 1)
+            : answers.synthesis;
+          return { text: reply ?? "Synthesized answer.", usage };
+        }
+
+        model.answered.push(user);
+        const reply = typeof answers.answer === "function"
+          ? answers.answer(user, model.answered.length - 1)
+          : answers.answer;
+        return { text: reply ?? "Grounded answer.", usage };
+      }
+
+      if (system.includes("# Writing a merged release opening")) {
+        model.merged.push(user);
+        const reply = typeof answers.merge === "function"
+          ? answers.merge(user, model.merged.length - 1)
+          : answers.merge;
+        if (reply === undefined) throw new Error("No fake merge opening supplied");
+        return { text: reply, usage };
+      }
+
+      if (
+        !system.includes("# Revising a release note") &&
+        !system.includes("# Revising a release index")
+      ) {
+        throw new Error("Unknown model role in test");
+      }
       const note = noteFrom(user);
       model.revised.push(note);
       return { text: answers.edit ? answers.edit(note) : note, usage };
@@ -117,6 +165,41 @@ This release adds exports.
 - Updated the Docker base image to node:22
 `;
 
+function markdownRelease(
+  fromVersion: string,
+  toVersion: string,
+  feature: string,
+  date: string
+): string {
+  return `# Test Platform · Release ${toVersion}
+
+_PRD · ${date} · Changes since ${fromVersion}_
+
+---
+
+${feature} is now available.
+
+### 🚀 New Features
+
+- ${feature}
+`;
+}
+
+function markdownMergedOpening(
+  fromVersion: string,
+  toVersion: string,
+  date: string,
+  summary = "The selected releases now read as one continuous update."
+): string {
+  return `# Test Platform · Release ${toVersion}
+
+_PRD · ${date} · Changes since ${fromVersion}_
+
+---
+
+${summary}`;
+}
+
 /** One listed release, as a generation writes it: its marker, then its entry. */
 function indexEntry(from: string, to: string, date: string): string {
   const record = { environment: "PRD", fromVersion: from, toVersion: to, date, href: `release-notes_${from}_${to}.md` };
@@ -126,6 +209,19 @@ function indexEntry(from: string, to: string, date: string): string {
 _PRD · ${date} · Changes since ${from}_
 
 [Read release notes →](${record.href})
+`;
+}
+
+function releaseIndex(entries: string[]): string {
+  return `# Test Platform release notes
+
+A concise release history for PRD. The newest release is listed first.
+
+<!-- ai-release-notes:releases -->
+${entries.join("")}<!-- ai-release-notes:/releases -->
+
+---
+_Generated with [tabkram/ai-release-notes](https://github.com/tabkram/ai-release-notes)._
 `;
 }
 
@@ -619,6 +715,345 @@ test("keeps a listed release's marker while reducing the markup around it", () =
 });
 
 // ─────────────────────────────────────────
+// Merging a contiguous release chain
+// ─────────────────────────────────────────
+
+test("stages one combined note and source deletions, all reversible before save", async () => {
+  await withDirectory(async (directory) => {
+    const pattern = join(directory, "{env}", "release-notes_{from}_{to}.md");
+    const configPath = await writeConfig(directory, [
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${pattern}`,
+    ]);
+    const sources = [
+      ["v2.0.0", "v2.1.0", "Alpha controls", "July 01, 2026"],
+      ["v2.1.0", "v2.2.0", "Beta exports", "July 02, 2026"],
+      ["v2.2.0", "v2.3.0", "Gamma filters", "July 03, 2026"],
+    ] as const;
+    const sourcePaths: string[] = [];
+    for (const [from, to, feature, date] of sources) {
+      const path = join(directory, "PRD", `release-notes_${from}_${to}.md`);
+      sourcePaths.push(path);
+      await writeRelease(path, markdownRelease(from, to, feature, date));
+    }
+    const unrelatedPath = join(
+      directory,
+      "PRD",
+      "release-notes_v8.0.0_v8.1.0.md"
+    );
+    const unrelated = markdownRelease(
+      "v8.0.0",
+      "v8.1.0",
+      "Unrelated billing",
+      "July 04, 2026"
+    );
+    await writeRelease(unrelatedPath, unrelated);
+
+    const model = fakeModel({
+      merge: markdownMergedOpening("v2.0.0", "v2.3.0", "July 03, 2026"),
+    });
+    const open = () => PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+    const destination = join(
+      directory,
+      "PRD",
+      "release-notes_v2.0.0_v2.3.0.md"
+    );
+
+    const undoSession = await open();
+    const staged = await undoSession.merge({
+      fromVersion: "v2.0.0",
+      // The planner may omit a conventional prefix; the catalog owns spelling.
+      toVersion: "2.3.0",
+      kinds: ["release"],
+    });
+
+    assert.equal(staged.usage.modelCalls, 1);
+    assert.equal(model.merged.length, 1);
+    assert.match(model.merged[0], /Opening of v2\.0\.0 → v2\.1\.0/);
+    assert.match(model.merged[0], /Opening of v2\.1\.0 → v2\.2\.0/);
+    assert.match(model.merged[0], /Opening of v2\.2\.0 → v2\.3\.0/);
+    assert.doesNotMatch(model.merged[0], /Unrelated billing|v8\.1\.0/);
+    assert.deepEqual(
+      staged.edits.map((edit) => edit.operation).sort(),
+      ["create", "delete", "delete", "delete"]
+    );
+    assert.equal(
+      staged.edits.find((edit) => edit.operation === "create")?.path,
+      destination
+    );
+    assert.equal(undoSession.pending().length, 4);
+
+    const combined = undoSession.documents.find(
+      (document) => document.path === destination
+    );
+    assert.equal(combined?.created, true);
+    assert.match(combined?.content ?? "", /^# Test Platform · Release v2\.3\.0/m);
+    assert.match(combined?.content ?? "", /Changes since v2\.0\.0/);
+    for (const feature of ["Alpha controls", "Beta exports", "Gamma filters"]) {
+      assert.equal(combined?.content.match(new RegExp(feature, "g"))?.length, 1);
+    }
+    assert.equal(
+      undoSession.documents.find((document) => document.path === unrelatedPath)?.removed,
+      undefined
+    );
+
+    // Staging has not touched disk.
+    await assert.rejects(readFile(destination, "utf-8"), { code: "ENOENT" });
+    for (const path of sourcePaths) {
+      assert.match(await readFile(path, "utf-8"), /New Features/);
+    }
+    assert.equal(await readFile(unrelatedPath, "utf-8"), unrelated);
+
+    assert.equal(undoSession.undo(), true);
+    assert.equal(undoSession.pending().length, 0);
+    assert.equal(
+      undoSession.documents.some((document) => document.path === destination),
+      false
+    );
+    assert.deepEqual(
+      undoSession.documents.map((document) => document.path).sort(),
+      [...sourcePaths, unrelatedPath].sort()
+    );
+
+    // Reset has the same topology guarantee when used instead of undo.
+    const resetSession = await open();
+    const callsBeforeResetMerge = model.merged.length;
+    await resetSession.merge({ fromVersion: "v2.0.0", toVersion: "v2.3.0" });
+    assert.equal(model.merged.length, callsBeforeResetMerge + 1);
+    resetSession.reset();
+    assert.equal(resetSession.pending().length, 0);
+    assert.equal(
+      resetSession.documents.some((document) => document.path === destination),
+      false
+    );
+    assert.deepEqual(
+      resetSession.documents.map((document) => document.path).sort(),
+      [...sourcePaths, unrelatedPath].sort()
+    );
+  });
+});
+
+test("saving a merge creates the combined note, removes its sources, and reconciles the index", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeIndexConfig(directory);
+    const selected = [
+      ["v4.0.0", "v4.1.0", "First capability", "July 10, 2026"],
+      ["v4.1.0", "v4.2.0", "Second capability", "July 11, 2026"],
+      ["v4.2.0", "v4.3.0", "Third capability", "July 12, 2026"],
+    ] as const;
+    const sourcePaths: string[] = [];
+    for (const [from, to, feature, date] of selected) {
+      const path = join(directory, "PRD", `release-notes_${from}_${to}.md`);
+      sourcePaths.push(path);
+      await writeRelease(path, markdownRelease(from, to, feature, date));
+    }
+    const unrelatedPath = join(
+      directory,
+      "PRD",
+      "release-notes_v9.0.0_v9.1.0.md"
+    );
+    await writeRelease(
+      unrelatedPath,
+      markdownRelease("v9.0.0", "v9.1.0", "Independent capability", "July 13, 2026")
+    );
+    const indexPath = join(directory, "PRD", "index.md");
+    await writeRelease(indexPath, releaseIndex([
+      indexEntry("v9.0.0", "v9.1.0", "2026-07-13"),
+      indexEntry("v4.2.0", "v4.3.0", "2026-07-12"),
+      indexEntry("v4.1.0", "v4.2.0", "2026-07-11"),
+      indexEntry("v4.0.0", "v4.1.0", "2026-07-10"),
+    ]));
+
+    const model = fakeModel({
+      merge: markdownMergedOpening("v4.0.0", "v4.3.0", "July 12, 2026"),
+    });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+    const destination = join(
+      directory,
+      "PRD",
+      "release-notes_v4.0.0_v4.3.0.md"
+    );
+
+    const result = await session.merge({
+      fromVersion: "v4.0.0",
+      toVersion: "v4.3.0",
+    });
+    assert.equal(model.merged.length, 1);
+    assert.equal(result.usage.modelCalls, 1);
+    assert.deepEqual(
+      result.edits.map((edit) => edit.operation).sort(),
+      ["create", "delete", "delete", "delete", "update"]
+    );
+
+    const stagedIndex = session.documents.find(
+      (document) => document.path === indexPath
+    )!.content;
+    const stagedRecords = readOutputIndexReleaseRecords(stagedIndex);
+    assert.deepEqual(
+      stagedRecords.map((record) => [
+        record.fromVersion,
+        record.toVersion,
+        record.href,
+      ]),
+      [
+        ["v9.0.0", "v9.1.0", "release-notes_v9.0.0_v9.1.0.md"],
+        ["v4.0.0", "v4.3.0", "release-notes_v4.0.0_v4.3.0.md"],
+      ]
+    );
+    assert.match(stagedIndex, /Release v4\.3\.0/);
+    assert.match(stagedIndex, /Changes since v4\.0\.0/);
+    assert.doesNotMatch(stagedIndex, /Release v4\.1\.0|Release v4\.2\.0/);
+
+    const saved = await session.save();
+    assert.deepEqual(
+      new Set(saved),
+      new Set([destination, indexPath, ...sourcePaths])
+    );
+    const combined = await readFile(destination, "utf-8");
+    for (const feature of [
+      "First capability",
+      "Second capability",
+      "Third capability",
+    ]) {
+      assert.equal(combined.match(new RegExp(feature, "g"))?.length, 1);
+    }
+    for (const path of sourcePaths) {
+      await assert.rejects(readFile(path, "utf-8"), { code: "ENOENT" });
+    }
+    assert.match(await readFile(unrelatedPath, "utf-8"), /Independent capability/);
+    assert.deepEqual(
+      readOutputIndexReleaseRecords(await readFile(indexPath, "utf-8")).map(
+        (record) => `${record.fromVersion} → ${record.toVersion}`
+      ),
+      ["v9.0.0 → v9.1.0", "v4.0.0 → v4.3.0"]
+    );
+    assert.equal(session.pending().length, 0);
+    assert.equal(session.undo(), false);
+  });
+});
+
+test("a gap or unknown boundary fails before staging or calling the opening model", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeConfig(directory, [
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${join(directory, "{env}", "release-notes_{from}_{to}.md")}`,
+    ]);
+    await writeRelease(
+      join(directory, "PRD", "release-notes_v5.0.0_v5.1.0.md"),
+      markdownRelease("v5.0.0", "v5.1.0", "Before the gap", "July 20, 2026")
+    );
+    await writeRelease(
+      join(directory, "PRD", "release-notes_v5.2.0_v5.3.0.md"),
+      markdownRelease("v5.2.0", "v5.3.0", "After the gap", "July 21, 2026")
+    );
+
+    const model = fakeModel({
+      merge: markdownMergedOpening("v5.0.0", "v5.3.0", "July 21, 2026"),
+    });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+    const before = session.documents.map((document) => ({ ...document }));
+
+    await assert.rejects(
+      session.merge({ fromVersion: "v5.0.0", toVersion: "v5.3.0" }),
+      /No release chain leads from v5\.0\.0 to v5\.3\.0/
+    );
+    await assert.rejects(
+      session.merge({ fromVersion: "v5.0.0", toVersion: "v7.7.7" }),
+      /Version "v7\.7\.7" is not a boundary in the open release catalog/
+    );
+    assert.equal(model.merged.length, 0);
+    assert.equal(session.pending().length, 0);
+    assert.deepEqual(session.documents, before);
+  });
+});
+
+test("merges every open language as a separate atomic output group", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeConfig(directory, [
+      "prompt:",
+      "  languages:",
+      "    - en",
+      "    - fr",
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${join(directory, "{env}", "{lang}", "release-notes_{from}_{to}.md")}`,
+    ]);
+    for (const language of ["en", "fr"]) {
+      await writeRelease(
+        join(directory, "PRD", language, "release-notes_v6.0.0_v6.1.0.md"),
+        markdownRelease(
+          "v6.0.0",
+          "v6.1.0",
+          language === "fr" ? "Commandes en lot" : "Batch controls",
+          "July 22, 2026"
+        )
+      );
+      await writeRelease(
+        join(directory, "PRD", language, "release-notes_v6.1.0_v6.2.0.md"),
+        markdownRelease(
+          "v6.1.0",
+          "v6.2.0",
+          language === "fr" ? "Exports planifiés" : "Scheduled exports",
+          "July 23, 2026"
+        )
+      );
+    }
+
+    const model = fakeModel({
+      merge: (prompt) => markdownMergedOpening(
+        "v6.0.0",
+        "v6.2.0",
+        "July 23, 2026",
+        prompt.includes("Language: fr")
+          ? "Les deux livraisons forment maintenant une seule mise à jour."
+          : "Both releases now form one update."
+      ),
+    });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+
+    const result = await session.merge({
+      fromVersion: "v6.0.0",
+      toVersion: "v6.2.0",
+    });
+    assert.equal(model.merged.length, 2);
+    assert.equal(result.usage.modelCalls, 2);
+    assert.deepEqual(
+      result.edits.map((edit) => edit.operation).sort(),
+      ["create", "create", "delete", "delete", "delete", "delete"]
+    );
+    assert.deepEqual(
+      session.documents
+        .filter((document) => document.created)
+        .map((document) => document.language)
+        .sort(),
+      ["en", "fr"]
+    );
+    assert.equal(session.pending().length, 6);
+    session.reset();
+    assert.equal(session.pending().length, 0);
+    assert.equal(session.documents.length, 4);
+  });
+});
+
+// ─────────────────────────────────────────
 // Reading what was asked for
 // ─────────────────────────────────────────
 
@@ -635,16 +1070,64 @@ test("reads the action a message turned out to mean", () => {
   assert.equal(revise.action, "revise");
   assert.equal(revise.instruction, "Remove the Docker line from the Technical section");
 
-  assert.equal(readSessionAction("Sure, I can help with that!", "remove duplicates").action, "revise");
-  assert.equal(
-    readSessionAction("Sure, I can help with that!", "remove duplicates").instruction,
-    "remove duplicates"
+  assert.deepEqual(
+    readSessionAction(
+      JSON.stringify({
+        action: "merge",
+        instruction: "",
+        reply: "Combining that range.",
+        scope: {
+          fromVersion: "v2.0.0",
+          toVersion: "v2.3.0",
+          languages: ["fr"],
+          kinds: ["release"],
+        },
+      }),
+      "combine the selected run"
+    ),
+    {
+      action: "merge",
+      instruction: "combine the selected run",
+      reply: "Combining that range.",
+      scope: {
+        fromVersion: "v2.0.0",
+        toVersion: "v2.3.0",
+        languages: ["fr"],
+        kinds: ["release"],
+      },
+    }
   );
-  // An action this does not have is no action at all.
-  assert.equal(readSessionAction('{"action":"deploy"}', "ship it").action, "revise");
+
+  assert.deepEqual(
+    readSessionAction(
+      '{"action":"answer","instruction":"Assess the recurring theme","reply":"I will inspect it.",' +
+        '"answerFrom":"notes","scope":{"toVersion":"v2.2.0","kinds":["release"]}}',
+      "assess that release"
+    ),
+    {
+      action: "answer",
+      instruction: "Assess the recurring theme",
+      reply: "I will inspect it.",
+      answerFrom: "notes",
+      scope: { toVersion: "v2.2.0", kinds: ["release"] },
+    }
+  );
+
+  for (const malformed of [
+    "Sure, I can help with that!",
+    '{"action":"deploy"}',
+    '{"action":"merge","scope":{"kinds":["repository"]}}',
+    '{"action":"answer","answerFrom":"internet"}',
+    '{"action":',
+  ]) {
+    assert.deepEqual(
+      readSessionAction(malformed, "keep this request intact"),
+      { action: "unclear", instruction: "keep this request intact", reply: "" }
+    );
+  }
 });
 
-test("routes a message through the model, and falls back to revising when it cannot", async () => {
+test("routes with the document catalog and the previous exchange, and fails closed", async () => {
   await withDirectory(async (directory) => {
     const configPath = await writeConfig(directory, [
       "output:",
@@ -653,19 +1136,42 @@ test("routes a message through the model, and falls back to revising when it can
     ]);
     await writeRelease(join(directory, "PRD", "release-notes_v1.0.0_v1.1.0.md"), NOTE);
 
-    const model = fakeModel({ route: { action: "dedupe", reply: "Dropping the repeats." } });
+    const model = fakeModel({
+      route: (_prompt, index) => index === 0
+        ? {
+            action: "answer",
+            instruction: "Report the state of the open material",
+            reply: "I will inspect the open material.",
+            answerFrom: "catalog",
+          }
+        : { action: "done", reply: "Finished." },
+    });
     const session = await PromptSession.open({
       environment: "PRD",
       configPath,
       callModel: model.call,
     });
 
-    const action = await session.route("remove exact duplicate lines");
-    assert.equal(action.action, "dedupe");
-    assert.equal(action.reply, "Dropping the repeats.");
-    // The desk is told what it is looking at, never what the notes say.
+    const action = await session.route("report the current release-note state");
+    assert.equal(action.action, "answer");
+    assert.equal(action.answerFrom, "catalog");
+    assert.equal(action.reply, "I will inspect the open material.");
+
+    // The planner sees authoritative identities and state, never note prose.
     assert.match(model.routed[0], /Release notes open: 1, for PRD/);
+    assert.match(model.routed[0], /BEGIN DOCUMENT CATALOG/);
+    assert.match(
+      model.routed[0],
+      /"kind":"release","language":null,"from":"v1\.0\.0","to":"v1\.1\.0","dirty":false,"readable":true/
+    );
     assert.doesNotMatch(model.routed[0], /export button/);
+
+    await session.route("that is all");
+    assert.equal(model.routed.length, 2);
+    assert.match(model.routed[1], /The exchange just before this one:/);
+    assert.match(model.routed[1], /They said: report the current release-note state/);
+    assert.match(model.routed[1], /You placed it as: answer/);
+    assert.match(model.routed[1], /You answered: I will inspect the open material\./);
 
     const unreachable = await PromptSession.open({
       environment: "PRD",
@@ -674,8 +1180,142 @@ test("routes a message through the model, and falls back to revising when it can
         throw new Error("no provider today");
       },
     });
-    const fallback = await unreachable.route("drop the docker line");
-    assert.deepEqual(fallback, { action: "revise", instruction: "drop the docker line", reply: "" });
+    const fallback = await unreachable.route("explain the newest note");
+    assert.deepEqual(
+      fallback,
+      { action: "unclear", instruction: "explain the newest note", reply: "" }
+    );
+  });
+});
+
+// ─────────────────────────────────────────
+// Answering from what is open
+// ─────────────────────────────────────────
+
+test("answers catalog questions without revising or writing any file", async () => {
+  await withDirectory(async (directory) => {
+    const path = join(directory, "PRD", "release-notes_v1.0.0_v1.1.0.md");
+    const configPath = await writeConfig(directory, [
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${join(directory, "{env}", "release-notes_{from}_{to}.md")}`,
+    ]);
+    await writeRelease(path, NOTE);
+
+    const model = fakeModel({ answer: "One release note is open and no changes are pending." });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+    const before = session.documents.map((document) => ({ ...document }));
+
+    const result = await session.answer(
+      "Report the number and save state of the open documents",
+      undefined,
+      "catalog"
+    );
+
+    assert.equal(result.text, "One release note is open and no changes are pending.");
+    assert.equal(result.usage.modelCalls, 1);
+    assert.equal(model.answered.length, 1);
+    assert.equal(model.synthesized.length, 0);
+    assert.equal(model.revised.length, 0);
+    assert.match(model.answered[0], /Release notes open: 1/);
+    assert.match(model.answered[0], /\(none of the open notes could be read\)/);
+    assert.doesNotMatch(model.answered[0], /Added the export button/);
+    assert.deepEqual(session.documents, before);
+    assert.equal(session.pending().length, 0);
+    assert.equal(await readFile(path, "utf-8"), NOTE);
+  });
+});
+
+test("selects the incoming release for one endpoint and every note inside two endpoints", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeConfig(directory, [
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${join(directory, "{env}", "release-notes_{from}_{to}.md")}`,
+    ]);
+    const fixtures = [
+      ["v2.0.0", "v2.1.0", "Alpha controls", "July 01, 2026"],
+      ["v2.1.0", "v2.2.0", "Beta exports", "July 02, 2026"],
+      ["v2.2.0", "v2.3.0", "Gamma filters", "July 03, 2026"],
+      ["v8.0.0", "v8.1.0", "Unrelated billing", "July 04, 2026"],
+    ] as const;
+    for (const [from, to, feature, date] of fixtures) {
+      await writeRelease(
+        join(directory, "PRD", `release-notes_${from}_${to}.md`),
+        markdownRelease(from, to, feature, date)
+      );
+    }
+
+    const model = fakeModel({ answer: (_prompt, index) => `Grounded selection ${index + 1}` });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+
+    await session.answer("Describe what arrived at v2.2.0", undefined, "notes");
+    assert.match(model.answered[0], /Beta exports/);
+    assert.doesNotMatch(model.answered[0], /Alpha controls|Gamma filters|Unrelated billing/);
+    assert.match(model.answered[0], /--- v2\.1\.0 → v2\.2\.0 ---/);
+
+    await session.answer("Contrast v2.0.0 through v2.3.0", undefined, "notes");
+    assert.match(model.answered[1], /Alpha controls/);
+    assert.match(model.answered[1], /Beta exports/);
+    assert.match(model.answered[1], /Gamma filters/);
+    assert.doesNotMatch(model.answered[1], /Unrelated billing/);
+
+    // A conventional missing `v` is resolved back to the catalog's spelling.
+    await session.answer("Inspect the material for 2.2.0", undefined, "notes");
+    assert.match(model.answered[2], /--- v2\.1\.0 → v2\.2\.0 ---/);
+    assert.match(model.answered[2], /Beta exports/);
+    assert.doesNotMatch(model.answered[2], /Alpha controls|Gamma filters/);
+
+    assert.equal(session.pending().length, 0);
+    assert.equal(model.revised.length, 0);
+  });
+});
+
+test("answers a large selection in bounded pieces and synthesizes every finding", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeConfig(directory, [
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${join(directory, "{env}", "release-notes_{from}_{to}.md")}`,
+    ]);
+    const detail = `\n\n${"Grounded detail for this release. ".repeat(1_300)}\n`;
+    await writeRelease(
+      join(directory, "PRD", "release-notes_v3.0.0_v3.1.0.md"),
+      markdownRelease("v3.0.0", "v3.1.0", "First large change", "July 05, 2026") + detail
+    );
+    await writeRelease(
+      join(directory, "PRD", "release-notes_v3.1.0_v3.2.0.md"),
+      markdownRelease("v3.1.0", "v3.2.0", "Second large change", "July 06, 2026") + detail
+    );
+
+    const model = fakeModel({
+      answer: (_prompt, index) => `Finding ${index + 1}`,
+      synthesis: "Combined grounded conclusion.",
+    });
+    const session = await PromptSession.open({
+      environment: "PRD",
+      configPath,
+      callModel: model.call,
+    });
+
+    const result = await session.answer("Identify the common direction across the open notes");
+
+    assert.equal(model.answered.length, 2);
+    assert.equal(model.synthesized.length, 1);
+    assert.equal(result.text, "Combined grounded conclusion.");
+    assert.equal(result.usage.modelCalls, 3);
+    assert.match(model.synthesized[0], /Finding 1/);
+    assert.match(model.synthesized[0], /Finding 2/);
+    assert.match(model.synthesized[0], /Identify the common direction across the open notes/);
+    assert.equal(session.pending().length, 0);
   });
 });
 

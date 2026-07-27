@@ -6,7 +6,7 @@ Transform your git changelog into clean, business-readable release notes — wit
 
 - **generate** — write the notes for a version range, in Markdown and/or HTML, in one or several languages.
 - **promote** — carry a reviewed note to the next environment, word for word.
-- **prompt** — ask, in your own words, for a change to notes already written.
+- **prompt** — ask about, revise, or merge notes already written, in your own words.
 
 **Fully customizable** via configuration: language, instructions, output format, templates, and context files.
 
@@ -92,27 +92,30 @@ model is asked for one thing only: the single opening that covers them all.
 
 → [Promoting a release](docs/promote.md) — **CLI options**, merge rules, environment folders.
 
-### 5. Ask for a change
+### 5. Work with existing notes
 
 A generated note is rarely wrong so much as not yet right. Regenerating loses
-every correction already made to it, so `prompt` opens the notes an environment
-holds and asks what to change:
+every correction already made to it, so `prompt` opens an environment as a
+release-note assistant:
 
 ```bash
-npx ai-release-notes prompt --env PROD --from v1.0.0 --to v1.1.0
+npx ai-release-notes prompt --env PROD
 ```
 
 ```
-💬 Is there anything you would like to change?
-› remove the exact duplicate lines
-› drop the technical section, I don't want to talk about the docker part
-› that's it, save them
+💬 What would you like to know or change?
+› compare the intended audience of the last two notes
+› combine those releases and simplify the introduction
+› save
 ```
 
-Each request shows what it changed, line by line, and nothing is written until
-you ask for it. In CI, pass the requests as `--ask` instead of answering them.
+Ask arbitrary questions grounded in the open release files, target a particular
+version or language, revise text, or merge a contiguous range into one note.
+Answers are read-only. Every revision, created or deleted file, and release-index
+update stays staged until you ask to save; undo, reset, and dry-run cover merges
+as well. In CI, pass requests as `--ask` instead of answering them.
 
-→ [Asking for a change](docs/prompt.md) — **CLI options**, CI mode, HTML pages.
+→ [Talking to your release notes](docs/prompt.md) — questions, merging, **CLI options**, CI mode, HTML pages.
 
 ---
 
@@ -135,8 +138,8 @@ console.log(result.markdown, result.html);
 ```
 
 `promote(options)` returns the files a promotion would write without writing
-them, and `PromptSession` applies requests to notes already on disk, saving only
-when you say so.
+them, and `PromptSession` answers questions or stages revisions and merges
+against notes already on disk, saving only when you say so.
 
 → [Programmatic API](docs/api.md) — `generate`, `promote`, `PromptSession`, and the steps they are built from.
 
@@ -149,7 +152,7 @@ when you say so.
 | [API keys](docs/api-keys.md) | A key per provider, and where to put it |
 | [Generating release notes](docs/generate.md) | `generate`, CLI options, dates, context files |
 | [Promoting a release](docs/promote.md) | `promote`, merging a range, environment folders |
-| [Asking for a change](docs/prompt.md) | `prompt`, revising written notes, CI mode |
+| [Talking to your release notes](docs/prompt.md) | `prompt`, questions, revisions, merges, CI mode |
 | [Configuration](docs/configuration.md) | `.ai-release-notes.yml`, output paths, indexes, templates |
 | [Instructions](docs/instructions.md) | What the model is told to write |
 | [Programmatic API](docs/api.md) | Using the package as a library |
