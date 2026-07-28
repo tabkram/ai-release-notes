@@ -1,3 +1,10 @@
+## [0.5.0](https://github.com/tabkram/ai-release-notes/compare/v0.4.0...v0.5.0) (2026-07-28)
+
+### Features
+
+* enable revision of release indexes in prompt session ([d129da2](https://github.com/tabkram/ai-release-notes/commit/d129da26963aeb16827c79225e296acae3ebd72f))
+* **prompt:** add intelligent scoped release-note assistant ([b5646bd](https://github.com/tabkram/ai-release-notes/commit/b5646bdcf01d56cf0bbd829013e5ce1f1410e266))
+* update config default dir to ".ai-release-notes/" ([6fa84ce](https://github.com/tabkram/ai-release-notes/commit/6fa84ce062119ed928cec63a4cdd49a794547e27))
 ## [0.4.0](https://github.com/tabkram/ai-release-notes/compare/v0.3.0...v0.4.0) (2026-07-26)
 
 ### Features
