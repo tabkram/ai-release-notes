@@ -112,6 +112,34 @@ function isOutputIndexReleaseRecord(value: unknown): value is OutputIndexRelease
 }
 
 /**
+ * What each release marker in a list says, in the order the list carries them.
+ *
+ * A marker is how a run recognizes the release an entry stands for, so a
+ * revision is allowed to drop one and never to write, repeat or alter one.
+ * Comparing these answers that question: a record reads as its own five values,
+ * so whitespace a model reformatted does not read as a change, while any value
+ * it edited does.
+ */
+export function readOutputIndexReleaseMarkers(content: string): string[] {
+  return [...content.matchAll(RELEASE_MARKER)].map((match) => {
+    const payload = match[1];
+    if (payload.startsWith("{")) {
+      try {
+        const parsed: unknown = JSON.parse(payload);
+        if (isOutputIndexReleaseRecord(parsed)) {
+          return JSON.stringify([
+            parsed.environment, parsed.fromVersion, parsed.toVersion, parsed.date, parsed.href,
+          ]);
+        }
+      } catch {
+        // Not a record after all: it reads as the raw payload a legacy entry has.
+      }
+    }
+    return payload.trim();
+  });
+}
+
+/**
  * Place a release among the ones an index already lists.
  *
  * A release it already knows keeps its position; a new one opens the list,
@@ -533,6 +561,26 @@ export function sanitizeReleaseHtml(html: string): string {
       const kept = sanitizeHtmlAttributes(attributes, allowed);
       return `<${[element, ...kept].join(" ")}>`;
     });
+}
+
+/**
+ * Reduce HTML a model wrote to the markup a release index's list is made of.
+ *
+ * The same reduction a revised release note gets, with one thing held back from
+ * it: an entry's release marker is a comment, and a release note's sanitizer
+ * drops every comment it finds. Dropping these would leave the page listing
+ * releases no later run could recognize, so each marker is set aside, the
+ * markup around it reduced, and the marker put back exactly as it was written.
+ */
+export function sanitizeReleaseIndexHtml(html: string): string {
+  let sanitized = "";
+  let read = 0;
+
+  for (const marker of html.matchAll(RELEASE_MARKER)) {
+    sanitized += sanitizeReleaseHtml(html.slice(read, marker.index)) + marker[0];
+    read = marker.index + marker[0].length;
+  }
+  return sanitized + sanitizeReleaseHtml(html.slice(read));
 }
 
 function sanitizeHtmlAttributes(attributes: string, allowed: string[]): string[] {

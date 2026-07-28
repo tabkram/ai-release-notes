@@ -8,7 +8,14 @@ import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
 import { RELEASES_MARKER } from "../release.js";
-import { createDefaultConfig, loadConfig, resolveProviderAlias } from "../config.js";
+import {
+  CONFIG_DIR,
+  DEFAULT_CONFIG_NAME,
+  GLOBAL_CONFIG_PATH,
+  createDefaultConfig,
+  loadConfig,
+  resolveProviderAlias,
+} from "../config.js";
 import {
   ENTRY_TEMPLATE_SEPARATOR,
   unwrapHtmlDocumentCodeFence,
@@ -16,7 +23,12 @@ import {
 } from "../output-index.js";
 import { formatOutputPath, isReleaseSpecificPath } from "../output-path.js";
 import { promote, PromotionError } from "../promote.js";
-import { PromptError, PromptSession, type PromptEditResult } from "../prompt-session.js";
+import {
+  PromptError,
+  PromptSession,
+  type PromptAnswer,
+  type PromptEditResult,
+} from "../prompt-session.js";
 import { changedLines } from "../text-diff.js";
 import type { ReleaseFormat } from "../release-document.js";
 import { FIRST_RELEASE, getLatestTag } from "../git.js";
@@ -153,13 +165,11 @@ program
   .option("-g, --global", "Create in home directory (~/.ai-release-notes.yml)")
   .option("-f, --force", "Overwrite existing file")
   .action(async (opts) => {
-    const { homedir } = await import("os");
-    const { resolve } = await import("path");
     const { existsSync } = await import("fs");
 
     const targetPath = opts.global
-      ? resolve(homedir(), ".ai-release-notes.yml")
-      : resolve(process.cwd(), ".ai-release-notes.yml");
+      ? GLOBAL_CONFIG_PATH
+      : resolve(process.cwd(), CONFIG_DIR, DEFAULT_CONFIG_NAME);
 
     if (existsSync(targetPath) && !opts.force) {
       console.log(chalk.yellow("⚠️  Config file already exists. Use --force to overwrite."));
@@ -500,7 +510,7 @@ program
 // ── prompt ──
 program
   .command("prompt")
-  .description("Ask, in your own words, for a change to release notes already written")
+  .description("Ask questions about release notes, or change them in your own words")
   .requiredOption("--env <environment>", "Whose release notes to open: PROD, QUA, DEV...")
   .option("--from <version>", "Open only the releases a range covers, from here")
   .option("--to <version>", "Open only the releases a range covers, up to here")
@@ -611,8 +621,8 @@ async function holdConversation(session: PromptSession, dryRun: boolean): Promis
   input.on("SIGINT", () => input.close());
 
   const state = { leaving: false, warnedAboutUnsaved: false, toldAboutSaving: false };
-  console.log(chalk.bold("\n💬 Is there anything you would like to change?"));
-  console.log(chalk.gray("   Say it in your own words. Say you are done when you are done."));
+  console.log(chalk.bold("\n💬 What would you like to know or change?"));
+  console.log(chalk.gray("   Ask in your own words. Say you are done when you are done."));
   input.setPrompt(chalk.cyan("\n› "));
   input.prompt();
 
@@ -647,7 +657,7 @@ async function answerMessage(
   switch (action.action) {
     case "revise": {
       const working = progress("✍️  Revising...");
-      const result = await session.revise(action.instruction);
+      const result = await session.revise(action.instruction, action.scope);
       working.stop();
       printPromptEdits(result);
       // A revision that reports success reads like a file that was written, and
@@ -655,6 +665,47 @@ async function answerMessage(
       if (session.pending().length > 0 && !state.toldAboutSaving && !dryRun) {
         state.toldAboutSaving = true;
         console.log(chalk.gray("   Not written yet — ask me to save when the notes read right."));
+      }
+      return;
+    }
+
+    case "answer": {
+      const looking = progress("🔎 Reading what is open...");
+      try {
+        const answered = await session.answer(
+          action.instruction,
+          action.scope,
+          action.answerFrom
+        );
+        looking.stop();
+        printAnswer(answered);
+      } catch (error) {
+        // One question the provider would not answer is not the end of the
+        // session: everything asked for so far is still held, unsaved.
+        looking.stop();
+        console.log(chalk.yellow(`   Could not answer that — ${errorMessage(error)}`));
+      }
+      return;
+    }
+
+    case "merge": {
+      const working = progress("🧩 Merging the release range...");
+      try {
+        const result = await session.merge({
+          instruction: action.instruction,
+          ...action.scope,
+        });
+        working.stop();
+        printPromptEdits(result);
+        if (session.pending().length > 0 && !state.toldAboutSaving && !dryRun) {
+          state.toldAboutSaving = true;
+          console.log(chalk.gray(
+            "   Not written yet — review the combined note, then ask me to save."
+          ));
+        }
+      } catch (error) {
+        working.stop();
+        console.log(chalk.yellow(`   Could not merge that range — ${errorMessage(error)}`));
       }
       return;
     }
@@ -701,7 +752,9 @@ async function answerMessage(
 
     case "unclear":
       if (!action.reply) {
-        console.log(chalk.gray("   I did not follow that. What should change in the release notes?"));
+        console.log(chalk.gray(
+          "   I could not determine a safe action. What would you like to know or change?"
+        ));
       }
       return;
   }
@@ -721,12 +774,30 @@ async function runRequestedChanges(
     const action = await session.route(request);
     if (action.reply) printStatus(stdout, chalk.gray(`   ${action.reply}`));
 
-    // A script asked for a change to the release notes, so that is all that is
-    // acted on here: saving is what the end of the run is for, and taking a
-    // change back has nothing to take back.
-    const result = action.action === "dedupe"
-      ? session.dedupe()
-      : await session.revise(action.action === "revise" ? action.instruction : request);
+    // A question was asked, not a change requested. Answering it is the whole
+    // of what it wanted, and nothing failed by nothing being revised.
+    if (action.action === "answer") {
+      printAnswer(
+        await session.answer(action.instruction, action.scope, action.answerFrom),
+        stdout
+      );
+      continue;
+    }
+
+    let result: PromptEditResult;
+    if (action.action === "dedupe") {
+      result = session.dedupe();
+    } else if (action.action === "merge") {
+      result = await session.merge({ instruction: action.instruction, ...action.scope });
+    } else if (action.action === "revise") {
+      result = await session.revise(action.instruction, action.scope);
+    } else {
+      printStatus(stdout, chalk.yellow(
+        "   The request could not be planned as a safe non-interactive change."
+      ));
+      failures += 1;
+      continue;
+    }
 
     failures += printPromptEdits(result, stdout);
   }
@@ -734,8 +805,31 @@ async function runRequestedChanges(
   return failures;
 }
 
+/**
+ * Say what a question was answered with.
+ *
+ * It is prose rather than a diff, and it stands where a list of changed files
+ * would otherwise be, so it is indented like everything else the session says
+ * and closes with what it cost — the one line that tells a question apart from
+ * a change at a glance.
+ */
+function printAnswer(answered: PromptAnswer, stdout = false): void {
+  for (const line of answered.text.split("\n")) {
+    printStatus(stdout, line.trim() ? `   ${line}` : "");
+  }
+  printStatus(stdout, chalk.gray(
+    `\n   answered, nothing changed | ${formatNumber(answered.usage.totalTokens)} tokens | ${formatDuration(answered.usage.durationMs)}`
+  ));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function printVerbosePromptDetails(stdout: boolean, session: PromptSession): void {
-  const languages = [...new Set(session.documents.flatMap((d) => d.language ? [d.language] : []))];
+  const languages = [...new Set(session.documents.flatMap(
+    (document) => !document.removed && document.language ? [document.language] : []
+  ))];
 
   printStatus(stdout, chalk.gray("\n🧭 Session details"));
   printStatus(stdout, chalk.gray(`   Provider: ${session.provider}`));
@@ -748,15 +842,29 @@ function printVerbosePromptDetails(stdout: boolean, session: PromptSession): voi
 }
 
 function printOpenDocuments(session: PromptSession, stdout = false): void {
-  const count = session.documents.length;
-  printStatus(stdout, chalk.blue(
-    `\n📝 ${count} release note${count === 1 ? "" : "s"} open for ${session.environment}`
-  ));
+  const active = session.documents.filter((document) => !document.removed);
+  const notes = active.filter((document) => document.kind === "release").length;
+  const indexes = active.length - notes;
+  // An index names no version, so a line saying only how many files are open
+  // would leave whoever asked wondering which release the extra one is.
+  const opened = [
+    `${notes} release note${notes === 1 ? "" : "s"}`,
+    indexes > 0 ? `${indexes} release index${indexes === 1 ? "" : "es"}` : "",
+  ].filter(Boolean).join(" and ");
+  printStatus(stdout, chalk.blue(`\n📝 ${opened} open for ${session.environment}`));
 
   for (const document of session.documents) {
-    const range = [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
+    const range = document.kind === "index"
+      ? "every release listed"
+      : [document.fromVersion, document.toVersion].filter(Boolean).join(" → ");
     const language = document.language ? ` [${document.language}]` : "";
-    const pending = document.content !== document.saved ? chalk.yellow(" (changed)") : "";
+    const pending = document.removed
+      ? chalk.yellow(" (will be removed)")
+      : document.created
+        ? chalk.yellow(" (new)")
+        : document.content !== document.saved
+          ? chalk.yellow(" (changed)")
+          : "";
     printStatus(stdout,
       chalk.gray(`   ${relative(process.cwd(), document.path)}`) +
       chalk.gray(range ? `  ${range}` : "") + chalk.gray(language) + pending
@@ -785,6 +893,15 @@ function printPromptEdits(result: PromptEditResult, stdout = false): number {
     }
 
     changed += 1;
+    if (edit.operation === "delete") {
+      printStatus(stdout, chalk.yellow(`   🗑️  ${path} — will be removed on save`));
+      continue;
+    }
+    if (edit.operation === "create") {
+      printStatus(stdout, chalk.green(`   ➕ ${path} — new combined release note`));
+      printDiff(edit.before, edit.after, stdout);
+      continue;
+    }
     const removed = edit.removed?.length
       ? chalk.gray(`  (${edit.removed.length} repeated line${edit.removed.length === 1 ? "" : "s"})`)
       : "";
@@ -793,7 +910,7 @@ function printPromptEdits(result: PromptEditResult, stdout = false): number {
   }
 
   const usage = result.via === "comparison"
-    ? " | no model call: the lines were compared exactly"
+    ? " | no model call: the change was resolved locally"
     : ` | ${formatNumber(result.usage.totalTokens)} tokens | ${result.usage.modelCalls} model call${result.usage.modelCalls === 1 ? "" : "s"} | ${formatDuration(result.usage.durationMs)}`;
   printStatus(stdout, chalk.gray(`\n   ${changed} of ${result.edits.length} revised${usage}`));
 
@@ -830,20 +947,29 @@ async function savePromptSession(
   // The revised notes are the output asked for, so they go out whole and
   // nothing is written over: what to keep is the caller's to decide.
   if (stdout) {
-    console.log(pending.map((document) => document.content).join("\n\n"));
+    console.log(
+      pending
+        .filter((document) => !document.removed)
+        .map((document) => document.content)
+        .join("\n\n")
+    );
     return;
   }
 
   if (dryRun) {
-    console.log(chalk.yellow(`\n🔍 Dry run — ${pending.length} file(s) would be written:`));
+    console.log(chalk.yellow(`\n🔍 Dry run — ${pending.length} file operation(s) would be applied:`));
     for (const document of pending) {
-      console.log(chalk.gray(`   ${relative(process.cwd(), document.path)}`));
+      const operation = document.removed ? "remove" : document.created ? "create" : "update";
+      console.log(chalk.gray(`   ${operation.padEnd(6)} ${relative(process.cwd(), document.path)}`));
     }
     return;
   }
 
+  const removed = new Set(pending.filter((document) => document.removed).map((document) => document.path));
   for (const path of await session.save()) {
-    console.log(chalk.green(`💾 Saved ${relative(process.cwd(), path)}`));
+    console.log(removed.has(path)
+      ? chalk.green(`🗑️  Removed ${relative(process.cwd(), path)}`)
+      : chalk.green(`💾 Saved ${relative(process.cwd(), path)}`));
   }
 }
 

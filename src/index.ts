@@ -88,8 +88,15 @@ export {
   buildUserPrompt,
   buildEditSystemPrompt,
   buildEditUserPrompt,
+  buildIndexEditSystemPrompt,
+  buildIndexEditUserPrompt,
   buildSessionRouterSystemPrompt,
   buildSessionRouterUserPrompt,
+  buildSessionAnswerSystemPrompt,
+  buildSessionAnswerUserPrompt,
+  buildSessionAnswerSynthesisUserPrompt,
+  buildSessionMergeSystemPrompt,
+  buildSessionMergeUserPrompt,
   resolveInstructions,
   resolvePromptSource,
 } from "./prompts/builder.js";
@@ -134,8 +141,11 @@ export type {
   PromptDocument,
   PromptEdit,
   PromptEditResult,
+  PromptAnswer,
+  PromptMergeRequest,
   SessionAction,
   SessionActionName,
+  SessionScope,
   EditModelCall,
 } from "./prompt-session.js";
 
