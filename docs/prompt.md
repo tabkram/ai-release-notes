@@ -30,7 +30,8 @@ There is nothing to learn first. Every answer is read by a model that works out
 what it meant — a question, a revision, a structural merge, a change to take
 back, a request to save, or that you are done. The examples above are not a
 command vocabulary: the assistant routes ordinary questions and instructions
-from their meaning.
+from their meaning. Code then validates the model's proposed action and scope
+against the open catalog before any change is staged.
 
 Without `--from` and `--to`, every release note the environment holds is opened
 at once — along with the index listing them — and each request is applied to all
@@ -105,11 +106,10 @@ marker that says which release it is, so a request may drop a release along with
 its marker, and an answer that wrote, repeated or edited one is reported and the
 file left alone: an index cannot gain a release nobody released.
 
-A later `generate` run renders each listed release from its own marker again. An
-order you asked for survives it; wording you changed on an entry does not, since
-the run rewrites every entry from the template. A merge is the exception to the
-usual range rule: it stages the required index updates even when the release
-notes were opened with `--from` and `--to`.
+A later `generate` run inserts or replaces only the entry for that generated
+range. Historical entries keep their reviewed wording, formatting, and order.
+A merge is the exception to the usual range rule: it stages the required index
+updates even when the release notes were opened with `--from` and `--to`.
 
 ## In CI
 

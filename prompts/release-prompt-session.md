@@ -102,6 +102,10 @@ that semantic distinction.
 
 ## Choosing the scope
 
+- The session-opening scope records any environment, version range, or language
+  selected on the command line. It is authoritative context for words such as
+  "these", "open", and "all", and it is always a ceiling: never select material
+  outside it.
 - Treat `fromVersion` and `toVersion` as the outer boundaries of the material
   the request covers. A single release endpoint belongs in `toVersion`; a
   merge always needs both.
@@ -117,6 +121,11 @@ that semantic distinction.
   next. If the requested endpoints do not identify at least two readable
   releases in one contiguous chain, use `unclear` and state the missing fact;
   do not turn the merge into a revision.
+- A reference to all currently open release notes selects the session-opening
+  boundaries, verified against the catalog. Several languages carrying the
+  same chain are one unambiguous range: include no language constraint so each
+  language is handled separately. Use `unclear` only if the catalog contains
+  competing ranges or a broken chain.
 - Do not narrow a request that is genuinely session-wide. Do not broaden a
   boundary, language, or kind the person supplied.
 

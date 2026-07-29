@@ -1072,6 +1072,20 @@ test("reads the action a message turned out to mean", () => {
 
   assert.deepEqual(
     readSessionAction(
+      '{"action":"revise","instruction":"Sort the release entries newest first",' +
+        '"reply":"I will reorder the index.","scope":{"kinds":["index"]}}',
+      "sort the index files"
+    ),
+    {
+      action: "revise",
+      instruction: "Sort the release entries newest first",
+      reply: "I will reorder the index.",
+      scope: { kinds: ["index"] },
+    }
+  );
+
+  assert.deepEqual(
+    readSessionAction(
       JSON.stringify({
         action: "merge",
         instruction: "",
@@ -1184,6 +1198,133 @@ test("routes with the document catalog and the previous exchange, and fails clos
     assert.deepEqual(
       fallback,
       { action: "unclear", instruction: "explain the newest note", reply: "" }
+    );
+    assert.deepEqual(
+      await unreachable.route("merge them"),
+      { action: "unclear", instruction: "merge them", reply: "" }
+    );
+  });
+});
+
+test("uses the model's merge decision and completes only the selected range", async () => {
+  await withDirectory(async (directory) => {
+    const configPath = await writeConfig(directory, [
+      "output:",
+      "  - format: markdown",
+      `    saveTo: ${join(directory, "{env}", "{lang}", "release-notes_{from}_{to}.md")}`,
+    ]);
+    for (const language of ["en", "fr"]) {
+      await writeRelease(
+        join(directory, "QUA", language, "release-notes_v1.29.5_v1.29.6.md"),
+        markdownRelease("v1.29.5", "v1.29.6", "First change", "July 01, 2026")
+      );
+      await writeRelease(
+        join(directory, "QUA", language, "release-notes_v1.29.6_v1.29.7.md"),
+        markdownRelease("v1.29.6", "v1.29.7", "Second change", "July 02, 2026")
+      );
+      await writeRelease(
+        join(directory, "QUA", language, "release-notes_v1.29.7_v1.29.8.md"),
+        markdownRelease("v1.29.7", "v1.29.8", "Third change", "July 03, 2026")
+      );
+    }
+
+    const model = fakeModel({
+      route: {
+        action: "merge",
+        reply: "I will combine the selected release chain in each language.",
+      },
+      merge: markdownMergedOpening("v1.29.5", "v1.29.8", "July 03, 2026"),
+    });
+    const session = await PromptSession.open({
+      environment: "QUA",
+      fromVersion: "v1.29.5",
+      toVersion: "v1.29.8",
+      configPath,
+      callModel: model.call,
+    });
+
+    const message = "merge all these releases into one";
+    const mergeAction = await session.route(message);
+    assert.deepEqual(mergeAction, {
+      action: "merge",
+      instruction: message,
+      reply: "I will combine the selected release chain in each language.",
+      scope: {
+        fromVersion: "v1.29.5",
+        toVersion: "v1.29.8",
+        kinds: ["release"],
+      },
+    });
+
+    // The LLM sees the explicit command scope and both language chains. Code
+    // completes no intent: it only reuses those boundaries after the model has
+    // selected the structural merge action.
+    assert.match(model.routed[0], /Scope selected when this session was opened:/);
+    assert.match(model.routed[0], /From version: v1\.29\.5/);
+    assert.match(model.routed[0], /To version: v1\.29\.8/);
+    assert.equal(model.routed[0].match(/"language":"en"/g)?.length, 3);
+    assert.equal(model.routed[0].match(/"language":"fr"/g)?.length, 3);
+
+    const result = await session.merge({
+      instruction: mergeAction.instruction,
+      ...mergeAction.scope,
+    });
+    assert.equal(result.edits.filter((edit) => edit.operation === "create").length, 2);
+    assert.equal(result.edits.filter((edit) => edit.operation === "delete").length, 6);
+    assert.deepEqual(
+      session.documents
+        .filter((document) => document.created)
+        .map((document) => document.language)
+        .sort(),
+      ["en", "fr"]
+    );
+
+    // A model that remains uncertain is never overridden by keyword matching.
+    const uncertainModel = fakeModel({
+      route: {
+        action: "unclear",
+        reply: "Which release notes should I change?",
+      },
+    });
+    const uncertainSession = await PromptSession.open({
+      environment: "QUA",
+      fromVersion: "v1.29.5",
+      toVersion: "v1.29.8",
+      configPath,
+      callModel: uncertainModel.call,
+    });
+    assert.deepEqual(await uncertainSession.route(message), {
+      action: "unclear",
+      instruction: message,
+      reply: "Which release notes should I change?",
+    });
+
+    const narrowerModel = fakeModel({
+      route: {
+        action: "merge",
+        instruction: "merge v1.29.6 through v1.29.7",
+        reply: "I will merge only that range.",
+        scope: {
+          fromVersion: "v1.29.6",
+          toVersion: "v1.29.7",
+          kinds: ["release"],
+        },
+      },
+    });
+    const narrowerSession = await PromptSession.open({
+      environment: "QUA",
+      fromVersion: "v1.29.5",
+      toVersion: "v1.29.8",
+      configPath,
+      callModel: narrowerModel.call,
+    });
+    assert.deepEqual(
+      (await narrowerSession.route("merge only the middle release")).scope,
+      {
+        fromVersion: "v1.29.6",
+        toVersion: "v1.29.7",
+        kinds: ["release"],
+      }
     );
   });
 });

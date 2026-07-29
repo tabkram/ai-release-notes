@@ -94,6 +94,11 @@ export interface PromptSessionOptions {
   callModel?: EditModelCall;
 }
 
+type PromptSessionSelection = Pick<
+  PromptSessionOptions,
+  "fromVersion" | "toVersion" | "language"
+>;
+
 /** One release note a session has open. */
 export interface PromptDocument {
   path: string;
@@ -272,7 +277,8 @@ export class PromptSession {
     readonly environment: string,
     readonly provider: ProviderName,
     readonly documents: PromptDocument[],
-    private readonly callModel: EditModelCall
+    private readonly callModel: EditModelCall,
+    private readonly selection: PromptSessionSelection
   ) {}
 
   static async open(options: PromptSessionOptions): Promise<PromptSession> {
@@ -348,7 +354,11 @@ export class PromptSession {
     const callModel: EditModelCall = options.callModel
       ?? ((request) => callLLM(provider, providerConfig!, request.system, request.user));
 
-    return new PromptSession(config, options.environment, provider, documents, callModel);
+    return new PromptSession(config, options.environment, provider, documents, callModel, {
+      fromVersion: options.fromVersion,
+      toVersion: options.toVersion,
+      language: options.language,
+    });
   }
 
   /** The files revised since the last save. */
@@ -377,8 +387,8 @@ export class PromptSession {
    * would have to ask what was meant — and asking again is the one reply that
    * gets nobody any further.
    *
-   * An answer it cannot place is taken as a request to revise, which is what
-   * nearly every answer is: a session is never blocked by its own front desk.
+   * An answer it cannot place stays unclear. The model chooses the action;
+   * deterministic code later validates its scope before anything can change.
    */
   async route(message: string): Promise<SessionAction> {
     const said = message.trim();
@@ -395,6 +405,7 @@ export class PromptSession {
           openFiles: this.activeDocuments().length,
           unsavedFiles: this.pending().length,
           canUndo: this.history.length > 0,
+          selection: this.selection,
           previous: this.lastExchange,
           catalog: this.activeDocuments().map((document) => ({
             kind: document.kind,
@@ -406,12 +417,48 @@ export class PromptSession {
           })),
         }),
       });
-      return this.remember(said, readSessionAction(answer.text, said));
+      return this.remember(
+        said,
+        this.completeSelectedMergeScope(readSessionAction(answer.text, said))
+      );
     } catch {
       // Planning failed, so no mutating action is guessed. A question must
       // never turn into a broadcast revision because a provider was unavailable.
       return this.remember(said, { action: "unclear", instruction: said, reply: "" });
     }
+  }
+
+  /**
+   * Complete execution scope only after the model has chosen a structural
+   * merge. The command-line selection is safe to reuse when it supplied both
+   * boundaries and the request did not name a narrower range of its own.
+   */
+  private completeSelectedMergeScope(action: SessionAction): SessionAction {
+    if (
+      action.action !== "merge"
+      || action.scope?.fromVersion
+      || action.scope?.toVersion
+      || !this.selection.fromVersion
+      || !this.selection.toVersion
+    ) {
+      return action;
+    }
+
+    const releases = this.activeDocuments().filter(
+      (document) => document.kind === "release" && document.outputPattern
+    );
+    const mentioned = resolveMentionedVersions(action.instruction, releases);
+    if (mentioned.fromVersion || mentioned.toVersion) return action;
+
+    return {
+      ...action,
+      scope: {
+        ...action.scope,
+        fromVersion: this.selection.fromVersion,
+        toVersion: this.selection.toVersion,
+        kinds: ["release"],
+      },
+    };
   }
 
   /**

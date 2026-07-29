@@ -121,6 +121,12 @@ export function buildSessionRouterUserPrompt(params: {
   openFiles: number;
   unsavedFiles: number;
   canUndo: boolean;
+  /** The scope explicitly selected when the prompt session was opened. */
+  selection?: {
+    fromVersion?: string;
+    toVersion?: string;
+    language?: string;
+  };
   /**
    * Compact metadata for semantic scope selection. Contents never travel here:
    * the planner only needs to know which exact document identities exist.
@@ -154,9 +160,18 @@ export function buildSessionRouterUserPrompt(params: {
     })))
     .join("\n");
 
+  const selection = [
+    `From version: ${params.selection?.fromVersion ?? "(not constrained)"}`,
+    `To version: ${params.selection?.toVersion ?? "(not constrained)"}`,
+    `Language: ${params.selection?.language ?? "(all open languages)"}`,
+  ].join("\n");
+
   return `Release notes open: ${params.openFiles}, for ${params.environment}
 Changed since the last save: ${params.unsavedFiles}
 A change to take back: ${params.canUndo ? "yes" : "no"}
+
+Scope selected when this session was opened:
+${selection}
 ${previous}
 ${DOCUMENT_CATALOG_OPEN}
 ${catalog || "(no document records supplied)"}
