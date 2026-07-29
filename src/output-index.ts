@@ -14,14 +14,10 @@ import {
   applyOutputIndexLanguageSwitcher,
   hasOutputIndexLanguageSwitcher,
   markdownToHtml,
-  outputIndexReleaseId,
-  readLegacyOutputIndexEntries,
   readOutputIndexReleaseRecords,
-  readOutputIndexReleasesRegion,
   renderOutputIndexLanguageSwitcher,
   renderOutputIndexReleases,
   replaceOutputIndexReleases,
-  upsertOutputIndexReleaseRecord,
   RELEASES_MARKER,
   RELEASES_END_MARKER,
   type OutputIndexEntryTemplate,
@@ -29,14 +25,9 @@ import {
   type OutputIndexReleaseRecord,
 } from "./release.js";
 import { formatOutputPath } from "./output-path.js";
+import { compareVersions } from "./promote.js";
 import { AI_RELEASE_NOTES_VERSION } from "./version.js";
 import type { OutputIndexConfig } from "./types.js";
-
-/**
- * A language stands where this placeholder does while the localized indexes of
- * a run are looked for. It never reaches a file.
- */
-const LANGUAGE_PATH_PLACEHOLDER = "aireleasenoteslanguageplaceholder";
 
 export interface DiscoveredOutputIndexLanguage {
   language: string;
@@ -145,9 +136,8 @@ type OutputIndexLanguageTarget = Pick<
 /**
  * Add a release to every configured index, creating the ones that do not exist.
  *
- * An index carries what it knows about each release it lists, so the whole list
- * is rendered again on every run: a template or a language that changed reaches
- * the entire history, not just the release being added.
+ * Only the indexes and the release entry produced by this run are changed.
+ * Historical entries keep the wording and formatting already reviewed.
  */
 export async function updateOutputIndexes(params: UpdateOutputIndexesParams): Promise<void> {
   if (params.outputIndexes.length === 0 || params.releases.length === 0) return;
@@ -201,27 +191,6 @@ export async function updateOutputIndexes(params: UpdateOutputIndexesParams): Pr
 
   const outputIndexLanguageTargets: OutputIndexLanguageTarget[] = outputIndexTargets
     .flatMap((target) => target.language ? [{ ...target, language: target.language }] : []);
-  for (const [groupId, outputIndex] of params.outputIndexes.entries()) {
-    if (!outputIndex.saveTo.includes("{lang}")) continue;
-    const discovered = await discoverOutputIndexLanguages(
-      indexPath(outputIndex.saveTo, LANGUAGE_PATH_PLACEHOLDER),
-      LANGUAGE_PATH_PLACEHOLDER
-    );
-    for (const existingIndex of discovered) {
-      const alreadyAvailable = outputIndexLanguageTargets.some((target) =>
-        target.groupId === groupId &&
-        target.path.toLowerCase() === existingIndex.path.toLowerCase()
-      );
-      if (!alreadyAvailable) {
-        outputIndexLanguageTargets.push({
-          ...existingIndex,
-          groupId,
-          format: outputIndex.format,
-          templatePath: outputIndex.template,
-        });
-      }
-    }
-  }
 
   for (const index of outputIndexTargets) {
     await mkdir(dirname(index.path), { recursive: true });
@@ -244,34 +213,6 @@ export async function updateOutputIndexes(params: UpdateOutputIndexesParams): Pr
     });
     await writeFile(index.path, outputIndexContent, "utf-8");
     params.onUpdated?.(index.path, "release");
-  }
-
-  // An index this run did not write may still gain a sibling language, and its
-  // switcher is the only thing that has to change.
-  const currentIndexPaths = new Set(outputIndexTargets.map((target) => target.path.toLowerCase()));
-  for (const existingIndex of outputIndexLanguageTargets) {
-    if (currentIndexPaths.has(existingIndex.path.toLowerCase())) continue;
-
-    const existing = await readFile(existingIndex.path, "utf-8");
-    const languageLinks = getOutputIndexLanguageLinks(existingIndex, outputIndexLanguageTargets);
-    const languageSwitcher = renderOutputIndexLanguageSwitcher(existingIndex.format, languageLinks);
-    const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(existing);
-    let updated = applyOutputIndexLanguageSwitcher(existing, languageSwitcher);
-    if (
-      !hasLanguageSwitcher &&
-      !existingIndex.templatePath &&
-      languageLinks.length > 1 &&
-      existing.includes(RELEASES_MARKER)
-    ) {
-      updated = existing.replace(
-        RELEASES_MARKER,
-        `${languageSwitcher}\n\n${RELEASES_MARKER}`
-      );
-    }
-    if (updated !== existing) {
-      await writeFile(existingIndex.path, updated, "utf-8");
-      params.onUpdated?.(existingIndex.path, "languages");
-    }
   }
 }
 
@@ -351,25 +292,17 @@ export async function createOrUpdateOutputIndex(params: {
       params.format === "html" ? unwrapHtmlDocumentCodeFence(existing) : existing,
       params.format
     );
+    assertOutputIndexStructure(normalizedExisting, params.outputPath, params.format);
     // The entry template is read from its file on every run, so an index never
     // has to carry a copy of it: editing the file is what changes the shape.
     const { entryTemplate } = await loadOutputIndexEntryTemplate(params);
 
-    // Every release the index knows is rendered again from its record, so a
-    // template or a language that changed reaches the whole history, not just
-    // the release being added.
-    const region = readOutputIndexReleasesRegion(normalizedExisting);
-    const records = upsertOutputIndexReleaseRecord(
-      readOutputIndexReleaseRecords(region),
-      record
-    );
-    const legacyEntries = readLegacyOutputIndexEntries(
-      region,
-      records.map(outputIndexReleaseId)
-    );
-    const updated = replaceOutputIndexReleases(
+    // A generation owns this release only. Historical entries may have been
+    // translated or edited by hand, so their blocks stay byte-for-byte intact.
+    const updated = upsertOutputIndexReleaseEntry(
       normalizedExisting,
-      [renderReleases(records, entryTemplate), ...legacyEntries].filter(Boolean).join("\n")
+      record,
+      renderReleases([record], entryTemplate)
     );
 
     const hasLanguageSwitcher = hasOutputIndexLanguageSwitcher(updated);
@@ -402,6 +335,136 @@ export async function createOrUpdateOutputIndex(params: {
     ? rendered
     : markdownToHtml(rendered, { trustedHtml: true });
   return html;
+}
+
+interface IndexedOutputIndexEntry {
+  start: number;
+  payload: string;
+  release?: Pick<OutputIndexReleaseRecord, "environment" | "fromVersion" | "toVersion">;
+}
+
+// A serialized record may contain `>`; its serializer escapes `--`, so the
+// first comment terminator is the marker's own safe boundary.
+const OUTPUT_INDEX_RELEASE_MARKER =
+  /<!--\s*ai-release-notes:release\s+([\s\S]*?)\s*-->/g;
+
+/**
+ * Add one new release in descending version order, or update that same release
+ * in place. No other entry is rendered, moved, translated, or reformatted.
+ */
+function upsertOutputIndexReleaseEntry(
+  content: string,
+  record: OutputIndexReleaseRecord,
+  renderedEntry: string
+): string {
+  const markerStart = content.indexOf(RELEASES_MARKER);
+  if (markerStart < 0) {
+    return replaceOutputIndexReleases(content, renderedEntry);
+  }
+
+  const regionStart = markerStart + RELEASES_MARKER.length;
+  const markerEnd = content.indexOf(RELEASES_END_MARKER, regionStart);
+  const regionEnd = markerEnd < 0 ? content.length : markerEnd;
+  const region = content.slice(regionStart, regionEnd);
+  const entries = readIndexedOutputIndexEntries(region);
+  const existingIndex = entries.findIndex((entry) =>
+    outputIndexEntryIdentifies(entry, record)
+  );
+
+  if (existingIndex >= 0) {
+    const existing = entries[existingIndex];
+    const end = entries[existingIndex + 1]?.start ?? region.length;
+    const oldEntry = region.slice(existing.start, end);
+    const trailingWhitespace = oldEntry.match(/\s*$/)?.[0] ?? "";
+    const updatedRegion =
+      region.slice(0, existing.start) +
+      renderedEntry.trimEnd() +
+      trailingWhitespace +
+      region.slice(end);
+    return content.slice(0, regionStart) + updatedRegion + content.slice(regionEnd);
+  }
+
+  // An opaque legacy marker is an ordering barrier. Placing the new managed
+  // entry before it avoids moving across history whose version is ambiguous.
+  const before = entries.find((entry) =>
+    !entry.release || compareVersions(entry.release.toVersion, record.toVersion) < 0
+  );
+  const updatedRegion = before
+    ? insertOutputIndexEntryBefore(region, before.start, renderedEntry, lineEnding(content))
+    : appendOutputIndexEntry(region, renderedEntry, lineEnding(content));
+  return content.slice(0, regionStart) + updatedRegion + content.slice(regionEnd);
+}
+
+function readIndexedOutputIndexEntries(region: string): IndexedOutputIndexEntry[] {
+  return [...region.matchAll(OUTPUT_INDEX_RELEASE_MARKER)].map((marker) => ({
+    start: marker.index,
+    payload: marker[1].trim(),
+    release: readOutputIndexReleaseRecords(marker[0])[0] ?? readLegacyOutputIndexRelease(marker[1]),
+  }));
+}
+
+/**
+ * Legacy IDs use `environment_from_to`. Only exactly three decodable parts are
+ * safe to order; IDs containing extra underscores remain opaque.
+ */
+function readLegacyOutputIndexRelease(
+  payload: string
+): IndexedOutputIndexEntry["release"] {
+  const parts = payload.trim().split("_");
+  if (parts.length !== 3) return undefined;
+  try {
+    const [environment, fromVersion, toVersion] = parts.map(decodeURIComponent);
+    return { environment, fromVersion, toVersion };
+  } catch {
+    return undefined;
+  }
+}
+
+function outputIndexEntryIdentifies(
+  entry: IndexedOutputIndexEntry,
+  record: OutputIndexReleaseRecord
+): boolean {
+  if (entry.release) {
+    return entry.release.environment.toLowerCase() === record.environment.toLowerCase()
+      && entry.release.fromVersion === record.fromVersion
+      && entry.release.toVersion === record.toVersion;
+  }
+
+  // Even an otherwise ambiguous legacy ID can identify this known range: its
+  // exact from/to suffix leaves only the environment to compare.
+  const suffix = `_${encodeURIComponent(record.fromVersion)}_${encodeURIComponent(record.toVersion)}`;
+  if (!entry.payload.endsWith(suffix)) return false;
+  return entry.payload.slice(0, -suffix.length).toLowerCase()
+    === encodeURIComponent(record.environment).toLowerCase();
+}
+
+function insertOutputIndexEntryBefore(
+  region: string,
+  offset: number,
+  renderedEntry: string,
+  eol: string
+): string {
+  const before = region.slice(0, offset);
+  const separator = before.match(/\s*$/)?.[0] ?? "";
+  return before +
+    (separator ? "" : eol) +
+    renderedEntry.trimEnd() +
+    (separator || eol) +
+    region.slice(offset);
+}
+
+function appendOutputIndexEntry(region: string, renderedEntry: string, eol: string): string {
+  const trailingWhitespace = region.match(/\s*$/)?.[0] ?? "";
+  const end = region.length - trailingWhitespace.length;
+  const separator = trailingWhitespace || eol;
+  return region.slice(0, end) +
+    separator +
+    renderedEntry.trimEnd() +
+    (trailingWhitespace || eol);
+}
+
+function lineEnding(content: string): string {
+  return content.includes("\r\n") ? "\r\n" : "\n";
 }
 
 /**
@@ -559,6 +622,70 @@ export function ensureOutputIndexReleaseBoundary(
     return `${content.trimEnd()}\n${RELEASES_END_MARKER}\n`;
   }
   return `${content.slice(0, boundary).trimEnd()}\n${RELEASES_END_MARKER}\n${content.slice(boundary).replace(/^\n/, "")}`;
+}
+
+/**
+ * Refuse to compound an index whose managed region cannot be identified
+ * unambiguously. Appending another region would silently put invalid markup
+ * after the document or preserve an unresolved merge conflict.
+ */
+function assertOutputIndexStructure(
+  content: string,
+  outputPath: string,
+  format: "markdown" | "html"
+): void {
+  if (/^(?:<{7}|>{7})(?:\s|$)/m.test(content)) {
+    throw new Error(
+      `Output index contains unresolved Git conflict markers: ${outputPath}`
+    );
+  }
+
+  const starts = markerPositions(content, RELEASES_MARKER);
+  const ends = markerPositions(content, RELEASES_END_MARKER);
+  const entries = [...content.matchAll(OUTPUT_INDEX_RELEASE_MARKER)]
+    .map((entry) => entry.index);
+
+  if (starts.length === 0 && ends.length === 0 && entries.length === 0) {
+    if (format === "html") {
+      throw new Error(
+        `HTML output index has no managed releases region: ${outputPath}`
+      );
+    }
+    return;
+  }
+
+  if (starts.length !== 1 || ends.length !== 1 || starts[0] >= ends[0]) {
+    throw new Error(
+      `Output index has malformed release boundaries: ${outputPath}`
+    );
+  }
+
+  if (entries.some((position) => position < starts[0] || position > ends[0])) {
+    throw new Error(
+      `Output index has release entries outside its managed region: ${outputPath}`
+    );
+  }
+
+  if (format === "html") {
+    const htmlEnd = content.toLowerCase().lastIndexOf("</html>");
+    if (htmlEnd >= 0 && (starts[0] > htmlEnd || ends[0] > htmlEnd)) {
+      throw new Error(
+        `HTML output index has a managed releases region after </html>: ${outputPath}`
+      );
+    }
+  }
+}
+
+function markerPositions(content: string, marker: string): number[] {
+  const positions: number[] = [];
+  let from = 0;
+  while (from < content.length) {
+    const position = content.indexOf(marker, from);
+    if (position < 0) break;
+    positions.push(position);
+    from = position + marker.length;
+  }
+  return positions;
 }
 
 export function toRelativeLink(fromPath: string, toPath: string): string {
