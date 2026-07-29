@@ -1,3 +1,12 @@
+## [0.5.1](https://github.com/tabkram/ai-release-notes/compare/v0.5.0...v0.5.1) (2026-07-29)
+
+### Features
+
+* improve interactive session and free prompting ([b97a889](https://github.com/tabkram/ai-release-notes/commit/b97a88944ed5bad9bfbe78de220649082f2b931e))
+
+### Bug Fixes
+
+* list a release older than the legacy history last in the index ([dfbe902](https://github.com/tabkram/ai-release-notes/commit/dfbe902b18341cb728d3419453ac1e11a4ac820c))
 ## [0.5.0](https://github.com/tabkram/ai-release-notes/compare/v0.4.0...v0.5.0) (2026-07-28)
 
 ### Features
