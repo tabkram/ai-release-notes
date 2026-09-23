@@ -67,6 +67,7 @@ export {
   loadConfig,
   createDefaultConfig,
   resolveProviderAlias,
+  resolveProviderConfig,
   ConfigError,
 } from "./config.js";
 
@@ -115,6 +116,7 @@ export {
 export type {
   ParsedCommit,
   ProviderConfig,
+  ProviderOverrides,
   ProviderName,
   ReleaseNotesConfig,
   GenerateOptions,

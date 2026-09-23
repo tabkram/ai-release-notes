@@ -3,13 +3,44 @@ import test from "node:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, resolveProviderConfig } from "../src/config.js";
 
 // ─────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────
 
 const MINIMAL_CONFIG = "provider: openai\nproviders:\n  openai:\n    model: gpt-4o\n";
+
+test("runtime provider options override only the values supplied", () => {
+  assert.deepEqual(
+    resolveProviderConfig(
+      {
+        model: "mistral-large-latest",
+        baseURL: "https://api.example.com/v1",
+        temperature: 0.3,
+        maxTokens: 4000,
+      },
+      { model: "ministral-3b-latest", maxTokens: 2000 }
+    ),
+    {
+      model: "ministral-3b-latest",
+      baseURL: "https://api.example.com/v1",
+      temperature: 0.3,
+      maxTokens: 2000,
+    }
+  );
+});
+
+test("runtime provider options ignore absent values and validate overrides", () => {
+  assert.deepEqual(
+    resolveProviderConfig({ model: "gpt-4o", temperature: 0.3 }, {}),
+    { model: "gpt-4o", temperature: 0.3 }
+  );
+  assert.throws(
+    () => resolveProviderConfig({ model: "gpt-4o" }, { temperature: 3 }),
+    /Too big/
+  );
+});
 
 async function withDirectory(run: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "ai-release-config-"));

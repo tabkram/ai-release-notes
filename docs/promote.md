@@ -96,6 +96,10 @@ outputs are reported as skipped.
 | `--from-dir <dir>` / `--to-dir <dir>` | Read/write the releases in these folders |
 | `--pattern <pattern>` | File name inside those folders (default: the configured one) |
 | `--with <provider>` | LLM provider used to write the opening of a merged range |
+| `--model <model>` | Model override for the selected provider |
+| `--temperature <number>` | Generation temperature override, from `0` to `2` |
+| `--max-tokens <number>` | Maximum output tokens override |
+| `--base-url <url>` | Provider base URL override |
 | `--lang <language>` | Promote one language only |
 | `--date <date>` | Release date: `now` (default), `tag`, or an ISO date |
 | `--config <path>` | Path to config file |

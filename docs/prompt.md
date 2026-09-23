@@ -135,6 +135,10 @@ created, changed, or removed.
 | `--from <version>` / `--to <version>` | Open only the releases a range covers; also defines the eligible merge range |
 | `--lang <language>` | Open one language only |
 | `--with <provider>` | LLM override; see [provider aliases](../README.md#1-providers-and-api-keys) |
+| `--model <model>` | Model override for the selected provider |
+| `--temperature <number>` | Generation temperature override, from `0` to `2` |
+| `--max-tokens <number>` | Maximum output tokens override |
+| `--base-url <url>` | Provider base URL override |
 | `--config <path>` | Path to config file |
 | `--ask <request>` | Ask a question or apply a request non-interactively. Repeatable, for CI; staged changes save at the end |
 | `--dry-run` | Show every write and deletion the requests would make without changing disk |

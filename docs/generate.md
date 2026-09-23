@@ -29,6 +29,10 @@ updated.
 | `--env <env>` | **Required.** Environment name (PROD, STAGING, etc.) |
 | `--date <date>` | Release date: `now` (default), `tag`, or an ISO date such as `2026-07-20` |
 | `--with <provider>` | LLM override; see [provider aliases](../README.md#1-providers-and-api-keys) |
+| `--model <model>` | Model override for the selected provider |
+| `--temperature <number>` | Generation temperature override, from `0` to `2` |
+| `--max-tokens <number>` | Maximum output tokens override |
+| `--base-url <url>` | Provider base URL override |
 | `--lang <language>` | Write one configured language only (default: all of them) |
 | `--config <path>` | Path to config file |
 | `--output <path>` | Output file path (overrides `output.saveTo`) |

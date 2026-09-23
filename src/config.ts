@@ -10,9 +10,12 @@ import { resolve, dirname } from "path";
 import { homedir } from "os";
 import YAML from "yaml";
 import {
+  ProviderConfigSchema,
   ReleaseNotesConfigSchema,
+  type ProviderConfig,
   type ReleaseNotesConfig,
   type ProviderName,
+  type ProviderOverrides,
   type PromptSource,
 } from "./types.js";
 
@@ -63,6 +66,23 @@ export async function loadConfig(
   resolvePromptSourcePath(config.prompt?.user, configDir);
 
   return config;
+}
+
+/** Apply explicit runtime provider settings over the selected provider config. */
+export function resolveProviderConfig(
+  configured: ProviderConfig,
+  overrides: ProviderOverrides
+): ProviderConfig {
+  const explicit = Object.fromEntries(
+    Object.entries({
+      model: overrides.model,
+      baseURL: overrides.baseURL,
+      temperature: overrides.temperature,
+      maxTokens: overrides.maxTokens,
+    }).filter(([, value]) => value !== undefined)
+  );
+
+  return ProviderConfigSchema.parse({ ...configured, ...explicit });
 }
 
 /**

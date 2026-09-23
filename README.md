@@ -64,6 +64,9 @@ npx ai-release-notes generate --to v1.1.0 --env PROD
 # One range, with Anthropic — needs ANTHROPIC_API_KEY
 npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD --with claude
 
+# Override only the model settings needed for this run
+npx ai-release-notes generate --to v1.1.0 --env PROD --with mistral --model ministral-3b-latest --max-tokens 4000
+
 # Print to the terminal instead of writing release files and indexes
 npx ai-release-notes generate --to v1.1.0 --env PROD --stdout
 ```

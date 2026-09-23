@@ -33,6 +33,11 @@ The main parts are simple:
 Custom instruction and summary templates are optional. The generated config keeps
 their lines commented until you need them.
 
+The commands that call a model also accept optional `--model`, `--temperature`,
+`--max-tokens`, and `--base-url` overrides. A supplied command-line value wins
+over the selected provider's configuration; omitted values continue to come
+from this file.
+
 For the exact configuration and comments, see the annotated
 [example `.ai-release-notes.yml`](../examples/.ai-release-notes.yml). The
 [examples guide](../examples/README.md) then walks through a first run, writing

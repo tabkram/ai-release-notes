@@ -18,7 +18,7 @@ import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { basename, dirname, relative, resolve, sep } from "path";
 import { z } from "zod";
-import { loadConfig, resolveProviderAlias } from "./config.js";
+import { loadConfig, resolveProviderAlias, resolveProviderConfig } from "./config.js";
 import { loadReleaseNoteTemplate, stripEnclosingCodeFence } from "./generator.js";
 import { callLLM, type LLMCallResult } from "./llm.js";
 import {
@@ -64,7 +64,7 @@ import {
   RELEASES_MARKER,
   type OutputIndexReleaseRecord,
 } from "./release.js";
-import type { GenerationUsage, OutputIndexConfig, ProviderName, ReleaseNotesConfig } from "./types.js";
+import type { GenerationUsage, OutputIndexConfig, ProviderName, ProviderOverrides, ReleaseNotesConfig } from "./types.js";
 
 export class PromptError extends Error {
   constructor(message: string) {
@@ -79,7 +79,7 @@ export type EditModelCall = (request: {
   user: string;
 }) => Promise<LLMCallResult>;
 
-export interface PromptSessionOptions {
+export interface PromptSessionOptions extends ProviderOverrides {
   /** Whose release notes are opened: PROD, QUA, DEV... */
   environment: string;
   /** Narrow the session to the releases a range covers. */
@@ -289,13 +289,16 @@ export class PromptSession {
 
     // A session on your own model needs no key and no provider entry; one that
     // will call a provider is told now rather than after the first request.
-    const providerConfig = config.providers[provider];
-    if (!options.callModel && !providerConfig) {
+    const configuredProvider = config.providers[provider];
+    if (!options.callModel && !configuredProvider) {
       throw new PromptError(
         `Provider "${provider}" not configured. ` +
         `Add it to your config file under providers.${provider}`
       );
     }
+    const providerConfig = configuredProvider
+      ? resolveProviderConfig(configuredProvider, options)
+      : undefined;
 
     const outputs = config.output
       ? (Array.isArray(config.output) ? config.output : [config.output])

@@ -33,6 +33,14 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
+/** Optional provider settings that take precedence over the configuration file. */
+export interface ProviderOverrides {
+  model?: string;
+  baseURL?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
 export type ProviderName =
   | "openai"
   | "anthropic"
@@ -145,7 +153,7 @@ export interface ContextFile {
 // Generation options
 // ─────────────────────────────────────────
 
-export interface GenerateOptions {
+export interface GenerateOptions extends ProviderOverrides {
   /** Previous version tag (e.g. "v1.0.0") */
   fromVersion: string;
   /** Current version tag (e.g. "v1.1.0") */

@@ -18,6 +18,8 @@ const result = await generate({
   toVersion: "v1.1.0",
   environment: "PROD",
   provider: "claude",  // only ANTHROPIC_API_KEY is needed
+  model: "claude-sonnet-4-20250514",
+  maxTokens: 4000,
   format: "html",
   toDir: "./docs/releases",
   context: ["./specs/api-v2.md", "./docs/models/"],
@@ -47,6 +49,8 @@ import { promote } from "ai-release-notes";
 const { files, plan } = await promote({
   fromEnvironment: "QUA",
   toEnvironment: "PROD",
+  model: "ministral-3b-latest",
+  maxTokens: 4000,
 });
 
 console.log(plan.segments.map((s) => `${s.fromVersion} → ${s.toVersion}`));
@@ -65,7 +69,11 @@ lets the session run on a model of your own:
 ```typescript
 import { PromptSession } from "ai-release-notes";
 
-const session = await PromptSession.open({ environment: "PROD" });
+const session = await PromptSession.open({
+  environment: "PROD",
+  model: "gpt-4o-mini",
+  temperature: 0.2,
+});
 
 const { action, instruction } = await session.route("drop the docker line");
 const result = action === "dedupe"

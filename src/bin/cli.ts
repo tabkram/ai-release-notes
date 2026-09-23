@@ -3,7 +3,7 @@
  * CLI entry point
  */
 
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
 import { callLLM } from "../llm.js";
@@ -15,6 +15,7 @@ import {
   createDefaultConfig,
   loadConfig,
   resolveProviderAlias,
+  resolveProviderConfig,
 } from "../config.js";
 import {
   ENTRY_TEMPLATE_SEPARATOR,
@@ -84,6 +85,22 @@ function releaseFormat(value?: string): ReleaseFormat | undefined {
   return value === "md" ? "markdown" : (value as ReleaseFormat);
 }
 
+function temperatureOption(value: string): number {
+  const temperature = Number(value);
+  if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+    throw new InvalidArgumentError("temperature must be a number between 0 and 2");
+  }
+  return temperature;
+}
+
+function maxTokensOption(value: string): number {
+  const maxTokens = Number(value);
+  if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
+    throw new InvalidArgumentError("max tokens must be a positive integer");
+  }
+  return maxTokens;
+}
+
 /** Where a prompt comes from, for the verbose report. */
 function describePromptSource(source?: PromptSource): string {
   if (!source) return "built-in defaults";
@@ -133,7 +150,8 @@ function formatGenerationError(
   error: unknown,
   result?: Pick<GenerateResult, "metadata">,
   config?: ReleaseNotesConfig,
-  providerOverride?: ProviderName
+  providerOverride?: ProviderName,
+  modelOverride?: string
 ): string {
   const message = error instanceof Error ? error.message : String(error);
   if (!/rate limit|too many requests|\b429\b|quota/i.test(message)) {
@@ -141,7 +159,7 @@ function formatGenerationError(
   }
 
   const provider = result?.metadata.provider || providerOverride;
-  const model = provider ? config?.providers[provider]?.model : undefined;
+  const model = modelOverride || (provider ? config?.providers[provider]?.model : undefined);
   const target = [provider, model].filter(Boolean).join(" / ") || "the selected provider";
 
   return [
@@ -193,6 +211,10 @@ program
   .requiredOption("--env <environment>", "Environment: PROD, STAGING, DEV...")
   .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
+  .option("--model <model>", "Model override for the selected provider")
+  .option("--temperature <number>", "Generation temperature override (0 to 2)", temperatureOption)
+  .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
+  .option("--base-url <url>", "Provider base URL override")
   .option("--lang <language>", "Write one configured language only")
   .option("--config <path>", "Path to config file")
   .option("--output <path>", "Output file path (override config)")
@@ -234,6 +256,10 @@ program
         environment: opts.env,
         date: opts.date,
         provider: opts.with,
+        model: opts.model,
+        temperature: opts.temperature,
+        maxTokens: opts.maxTokens,
+        baseURL: opts.baseUrl,
         language: opts.lang,
         configPath: opts.config,
         changelogFile: opts.changelogFile,
@@ -344,7 +370,15 @@ program
                 template,
                 language,
                 generatedResult.metadata.provider as ProviderName,
-                loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig
+                resolveProviderConfig(
+                  loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig,
+                  {
+                    model: opts.model,
+                    temperature: opts.temperature,
+                    maxTokens: opts.maxTokens,
+                    baseURL: opts.baseUrl,
+                  }
+                )
               );
               addTemplateUsage(generatedResult.metadata.usage, translated.usage);
               return translated.text;
@@ -370,7 +404,7 @@ program
       const providerOverride = config
         ? (opts.with ? resolveProviderAlias(opts.with) : config.provider as ProviderName)
         : undefined;
-      console.error(chalk.red("\n❌ Error:"), formatGenerationError(err, partialResult, config, providerOverride));
+      console.error(chalk.red("\n❌ Error:"), formatGenerationError(err, partialResult, config, providerOverride, opts.model));
       process.exit(1);
     }
   });
@@ -387,6 +421,10 @@ program
   .option("--to-dir <dir>", "Write the promoted releases to this folder")
   .option("--pattern <pattern>", "File name inside those folders, with {from} and {to}")
   .option("--with <provider>", "LLM provider used to write the opening of a merged range")
+  .option("--model <model>", "Model override for the selected provider")
+  .option("--temperature <number>", "Generation temperature override (0 to 2)", temperatureOption)
+  .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
+  .option("--base-url <url>", "Provider base URL override")
   .option("--lang <language>", "Promote one language only")
   .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
   .option("--config <path>", "Path to config file")
@@ -415,6 +453,10 @@ program
         toDir: opts.toDir,
         pattern: opts.pattern,
         provider: opts.with,
+        model: opts.model,
+        temperature: opts.temperature,
+        maxTokens: opts.maxTokens,
+        baseURL: opts.baseUrl,
         language: opts.lang,
         date: opts.date,
         configPath: opts.config,
@@ -516,6 +558,10 @@ program
   .option("--to <version>", "Open only the releases a range covers, up to here")
   .option("--lang <language>", "Open one language only")
   .option("--with <provider>", "LLM provider override (claude, gpt4, mistral, gemini, ollama)")
+  .option("--model <model>", "Model override for the selected provider")
+  .option("--temperature <number>", "Generation temperature override (0 to 2)", temperatureOption)
+  .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
+  .option("--base-url <url>", "Provider base URL override")
   .option("--config <path>", "Path to config file")
   .option(
     "--ask <request>",
@@ -534,6 +580,10 @@ program
         toVersion: opts.to,
         language: opts.lang,
         provider: opts.with,
+        model: opts.model,
+        temperature: opts.temperature,
+        maxTokens: opts.maxTokens,
+        baseURL: opts.baseUrl,
         configPath: opts.config,
       });
 

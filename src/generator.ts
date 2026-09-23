@@ -2,7 +2,7 @@
  * Main generator orchestrator
  */
 
-import { loadConfig, resolveProviderAlias } from "./config.js";
+import { loadConfig, resolveProviderAlias, resolveProviderConfig } from "./config.js";
 import { getChangelog, parseCommits } from "./git.js";
 import { resolveReleaseDate } from "./release-date.js";
 import { callLLM } from "./llm.js";
@@ -72,13 +72,14 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     ? resolveProviderAlias(options.provider)
     : (config.provider as any);
 
-  const providerConfig = config.providers[providerName];
-  if (!providerConfig) {
+  const configuredProvider = config.providers[providerName];
+  if (!configuredProvider) {
     throw new Error(
       `Provider "${providerName}" not configured. ` +
         `Add it to your config file under providers.${providerName}`
     );
   }
+  const providerConfig = resolveProviderConfig(configuredProvider, options);
 
   // ── Extract commits ──
   let rawCommits: string[];
