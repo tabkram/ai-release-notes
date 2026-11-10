@@ -4,7 +4,7 @@
  * Only the API key for the active provider is required.
  */
 
-import { generateText } from "ai";
+import { APICallError, generateText, RetryError } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createMistral } from "@ai-sdk/mistral";
@@ -103,13 +103,17 @@ export async function callLLM(
   const apiKey = getApiKey(providerName);
   const model = createModel(providerName, config, apiKey);
 
-  const { text, usage } = await generateText({
+  const request = () => generateText({
     model,
     system,
     prompt: user,
     temperature: config.temperature ?? 0.3,
     maxOutputTokens: config.maxTokens ?? 4000,
+    maxRetries: config.initialRetryDelayMs === undefined ? config.maxRetries : 0,
   });
+  const { text, usage } = config.initialRetryDelayMs === undefined
+    ? await request()
+    : await retryRequest(request, config.maxRetries ?? 2, config.initialRetryDelayMs);
 
   return {
     text,
@@ -119,6 +123,37 @@ export async function callLLM(
       totalTokens: usage.totalTokens ?? 0,
     },
   };
+}
+
+async function retryRequest<T>(request: () => Promise<T>, maxRetries: number, initialDelayMs: number): Promise<T> {
+  const errors: unknown[] = [];
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      if (maxRetries === 0) throw error;
+      errors.push(error);
+      const retryable = APICallError.isInstance(error) && error.isRetryable;
+      if (!retryable || errors.length > maxRetries) {
+        if (!retryable && errors.length === 1) throw error;
+        throw new RetryError({
+          message: `Failed after ${errors.length} attempts. Last error: ${error instanceof Error ? error.message : String(error)}`,
+          reason: retryable ? "maxRetriesExceeded" : "errorNotRetryable",
+          errors,
+        });
+      }
+      const headers = error.responseHeaders ?? {};
+      let retryAfterMs = Number.parseFloat(headers["retry-after-ms"] ?? "");
+      if (!Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+        const retryAfter = headers["retry-after"] ?? "";
+        const seconds = Number.parseFloat(retryAfter);
+        retryAfterMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
+      }
+      const backoffMs = initialDelayMs * 2 ** (errors.length - 1);
+      const delayMs = Math.max(backoffMs, Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : 0);
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
 
 function createModel(

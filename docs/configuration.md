@@ -43,6 +43,43 @@ For the exact configuration and comments, see the annotated
 [examples guide](../examples/README.md) then walks through a first run, writing
 instructions, templates, and output layouts.
 
+## Retrying model requests
+
+Retry settings belong to the selected provider, alongside its model:
+
+```yaml
+providers:
+  mistral:
+    model: ministral-3b-latest
+    maxRetries: 5
+    initialRetryDelayMs: 5000
+```
+
+`maxRetries` counts additional attempts after the first request. It defaults to
+the SDK's existing two retries; `0` disables retries. `initialRetryDelayMs` sets
+the first wait in milliseconds, then doubles it for each retry: `5000` means
+5, 10, 20, 40, then 80 seconds with five retries. A longer valid `Retry-After`
+or `retry-after-ms` value from the provider takes precedence over that wait.
+Both settings accept non-negative integers, including a zero initial delay.
+
+When `initialRetryDelayMs` is omitted, the SDK's existing retry strategy is
+preserved, including its usual two-second initial backoff and handling of retry
+headers. Existing configurations need no changes.
+
+`generate`, `promote`, and `prompt` accept `--max-retries` and
+`--initial-retry-delay-ms` to override the provider's settings for one run:
+
+```bash
+ai-release-notes generate --from v1.37.0 --to v1.38.0 --env QUA \
+  --max-retries 5 --initial-retry-delay-ms 5000
+```
+
+Only the failed model request is retried. For example, a rate limit while
+translating an index template does not regenerate the release notes already
+written. Authentication and other non-retryable errors fail immediately;
+exhausted retries still report an error. Increasing waits can help with temporary
+rate limits, but does not resolve an exhausted account quota.
+
 ## Index entries
 
 One listed release is one template: markup with `{{slot}}` placeholders, and

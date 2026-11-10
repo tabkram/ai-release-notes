@@ -17,6 +17,9 @@ provider: anthropic
 providers:
   anthropic:
     model: claude-sonnet-4-20250514
+    # Optional: additional attempts and the first exponential wait (milliseconds).
+    # maxRetries: 5
+    # initialRetryDelayMs: 5000
     temperature: 0.3
     maxTokens: 4000
 

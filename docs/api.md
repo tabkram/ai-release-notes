@@ -31,6 +31,11 @@ console.log(result.html);
 
 `generateFromChangelog(...)` takes a raw changelog instead of reading git.
 
+Model entry points also accept `maxRetries` and `initialRetryDelayMs` as optional
+provider overrides, with the same precedence as `model` and `maxTokens`. For
+example, `{ maxRetries: 5, initialRetryDelayMs: 5000 }` starts retries after five
+seconds and doubles the wait each time. See [retry settings](configuration.md#retrying-model-requests).
+
 `markdownToHtml(markdown, options?)` wraps Markdown in the bundled release-note
 template, which supplies the page title and footer:
 

@@ -101,6 +101,14 @@ function maxTokensOption(value: string): number {
   return maxTokens;
 }
 
+function nonNegativeIntegerOption(value: string): number {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new InvalidArgumentError("must be a non-negative integer");
+  }
+  return number;
+}
+
 /** Where a prompt comes from, for the verbose report. */
 function describePromptSource(source?: PromptSource): string {
   if (!source) return "built-in defaults";
@@ -214,6 +222,8 @@ program
   .option("--model <model>", "Model override for the selected provider")
   .option("--temperature <number>", "Generation temperature override (0 to 2)", temperatureOption)
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
+  .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
+  .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
   .option("--base-url <url>", "Provider base URL override")
   .option("--lang <language>", "Write one configured language only")
   .option("--config <path>", "Path to config file")
@@ -259,6 +269,8 @@ program
         model: opts.model,
         temperature: opts.temperature,
         maxTokens: opts.maxTokens,
+        maxRetries: opts.maxRetries,
+        initialRetryDelayMs: opts.initialRetryDelayMs,
         baseURL: opts.baseUrl,
         language: opts.lang,
         configPath: opts.config,
@@ -376,6 +388,8 @@ program
                     model: opts.model,
                     temperature: opts.temperature,
                     maxTokens: opts.maxTokens,
+                    maxRetries: opts.maxRetries,
+                    initialRetryDelayMs: opts.initialRetryDelayMs,
                     baseURL: opts.baseUrl,
                   }
                 )
@@ -424,6 +438,8 @@ program
   .option("--model <model>", "Model override for the selected provider")
   .option("--temperature <number>", "Generation temperature override (0 to 2)", temperatureOption)
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
+  .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
+  .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
   .option("--base-url <url>", "Provider base URL override")
   .option("--lang <language>", "Promote one language only")
   .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
@@ -456,6 +472,8 @@ program
         model: opts.model,
         temperature: opts.temperature,
         maxTokens: opts.maxTokens,
+        maxRetries: opts.maxRetries,
+        initialRetryDelayMs: opts.initialRetryDelayMs,
         baseURL: opts.baseUrl,
         language: opts.lang,
         date: opts.date,
@@ -561,6 +579,8 @@ program
   .option("--model <model>", "Model override for the selected provider")
   .option("--temperature <number>", "Generation temperature override (0 to 2)", temperatureOption)
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
+  .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
+  .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
   .option("--base-url <url>", "Provider base URL override")
   .option("--config <path>", "Path to config file")
   .option(
@@ -583,6 +603,8 @@ program
         model: opts.model,
         temperature: opts.temperature,
         maxTokens: opts.maxTokens,
+        maxRetries: opts.maxRetries,
+        initialRetryDelayMs: opts.initialRetryDelayMs,
         baseURL: opts.baseUrl,
         configPath: opts.config,
       });

@@ -79,6 +79,8 @@ export function resolveProviderConfig(
       baseURL: overrides.baseURL,
       temperature: overrides.temperature,
       maxTokens: overrides.maxTokens,
+      maxRetries: overrides.maxRetries,
+      initialRetryDelayMs: overrides.initialRetryDelayMs,
     }).filter(([, value]) => value !== undefined)
   );
 

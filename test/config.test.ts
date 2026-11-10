@@ -42,6 +42,39 @@ test("runtime provider options ignore absent values and validate overrides", () 
   );
 });
 
+test("retry settings remain optional for existing provider configurations", () => {
+  assert.deepEqual(resolveProviderConfig({ model: "gpt-4o" }, {}), { model: "gpt-4o" });
+});
+
+test("retry settings survive provider resolution and explicit overrides", () => {
+  assert.deepEqual(
+    resolveProviderConfig({ model: "gpt-4o", maxRetries: 5, initialRetryDelayMs: 5000 }, {}),
+    { model: "gpt-4o", maxRetries: 5, initialRetryDelayMs: 5000 }
+  );
+  assert.deepEqual(
+    resolveProviderConfig({ maxRetries: 5, initialRetryDelayMs: 5000 }, { maxRetries: 0, initialRetryDelayMs: 0 }),
+    { maxRetries: 0, initialRetryDelayMs: 0 }
+  );
+});
+
+test("rejects negative, fractional, and non-finite retry settings", () => {
+  for (const key of ["maxRetries", "initialRetryDelayMs"] as const) {
+    for (const value of [-1, 1.5, Infinity, NaN]) {
+      assert.throws(() => resolveProviderConfig({ [key]: value }, {}));
+    }
+  }
+});
+
+test("loads retry settings from the selected provider's YAML configuration", async () => {
+  await withDirectory(async (directory) => {
+    const path = join(directory, "config.yml");
+    await writeFile(path, `${MINIMAL_CONFIG}    maxRetries: 5\n    initialRetryDelayMs: 5000\n`, "utf-8");
+    const config = await loadConfig(path);
+    assert.equal(config.providers.openai.maxRetries, 5);
+    assert.equal(config.providers.openai.initialRetryDelayMs, 5000);
+  });
+});
+
 async function withDirectory(run: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "ai-release-config-"));
   try {

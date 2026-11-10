@@ -29,6 +29,8 @@ export const ProviderConfigSchema = z.object({
   baseURL: z.string().url().optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
+  maxRetries: z.number().int().nonnegative().optional(),
+  initialRetryDelayMs: z.number().int().nonnegative().optional(),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -39,6 +41,8 @@ export interface ProviderOverrides {
   baseURL?: string;
   temperature?: number;
   maxTokens?: number;
+  maxRetries?: number;
+  initialRetryDelayMs?: number;
 }
 
 export type ProviderName =
