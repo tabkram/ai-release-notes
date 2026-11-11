@@ -400,3 +400,59 @@ test("refuses unresolved conflict markers without changing the index", async () 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+for (const format of ["html", "markdown"] as const) {
+  test(`${format} index updates translate only the entry and preserve reviewed history`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ai-release-index-translation-"));
+    try {
+      const summary = join(directory, format === "html" ? "summary.html" : "summary.md");
+      const entry = join(directory, format === "html" ? "entry.html" : "entry.md");
+      const page = format === "html"
+        ? '<html><head><style>.entry { color: red; }</style></head><body><h1>Releases</h1>{{languages}}<!-- ai-release-notes:releases -->{{releases}}</body></html>'
+        : '# Releases\n\n{{languages}}\n\n<!-- ai-release-notes:releases -->\n{{releases}}';
+      const entrySource = format === "html"
+        ? '<section class="entry"><h2>Release {{toVersion}}</h2><p>{{date}} · Changes since {{fromVersion}}</p><a href="{{href}}">Read release notes</a></section>'
+        : '## Release {{toVersion}}\n\n{{date}} · Changes since {{fromVersion}}\n\n[Read release notes]({{href}})';
+      await writeFile(summary, page);
+      await writeFile(entry, entrySource);
+      const note = join(directory, "fr", "notes");
+      await mkdir(join(directory, "fr"));
+      await writeFile(note, "REVIEWED NOTE");
+      const requests: string[] = [];
+      const params = {
+        outputIndexes: [{ format, saveTo: join(directory, "{lang}", "index"), template: summary, entryTemplate: entry }],
+        releases: [{ path: note, format, language: "fr" }],
+        environment: "QUA", fromVersion: "v1", toVersion: "v2", date: "2026-11-05",
+        languages: ["fr"], primaryLanguage: "en",
+        translateTemplate: async (template: string) => {
+          requests.push(template);
+          return template.replace("Releases", "Versions").replace("Release {{toVersion}}", "Version {{toVersion}}")
+            .replace("Changes since", "Modifications depuis").replace("Read release notes", "Lire les notes de version");
+        },
+      };
+      await updateOutputIndexes(params);
+      const index = join(directory, "fr", "index");
+      const before = await readFile(index, "utf8");
+      assert.ok(requests[0].includes(page));
+      assert.ok(requests[0].includes(entrySource));
+      await updateOutputIndexes({ ...params, fromVersion: "v2", toVersion: "v3", date: "2026-11-10" });
+      assert.equal(requests.length, 2);
+      assert.equal(requests[1], entrySource);
+      const after = await readFile(index, "utf8");
+      const firstEntry = before.indexOf('<!-- ai-release-notes:release {');
+      const end = before.indexOf('<!-- ai-release-notes:/releases -->');
+      assert.equal(after.slice(0, firstEntry), before.slice(0, firstEntry));
+      assert.ok(after.includes(before.slice(firstEntry, end)));
+      assert.ok(after.endsWith(before.slice(end)));
+      assert.match(after, /Version v3/);
+      assert.match(after, /10 novembre 2026/);
+      assert.match(after, /Modifications depuis v2/);
+      assert.equal(await readFile(note, "utf8"), "REVIEWED NOTE");
+      const rerun = after;
+      await updateOutputIndexes({ ...params, fromVersion: "v2", toVersion: "v3", date: "2026-11-10" });
+      assert.equal(await readFile(index, "utf8"), rerun);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}

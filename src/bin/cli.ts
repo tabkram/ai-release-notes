@@ -1073,11 +1073,11 @@ async function translateOutputIndexTemplate(
   const translated = unwrapHtmlDocumentCodeFence(
     restoreTemplateTokens(result.text, protectedTemplate.tokens)
   );
-  if (!translated.includes(RELEASES_MARKER) || !translated.includes("{{releases}}")) {
-    throw new Error("Translated output-index template did not preserve the required releases marker or {{releases}} token");
-  }
-  if (template.includes(ENTRY_TEMPLATE_SEPARATOR) && !translated.includes(ENTRY_TEMPLATE_SEPARATOR)) {
-    throw new Error("Translated output-index template did not preserve its entry template");
+  const missingToken = protectedTemplate.tokens.find(([value]) =>
+    template.includes(value) && !translated.includes(value)
+  );
+  if (missingToken) {
+    throw new Error(`Translated output-index template did not preserve ${missingToken[0]}`);
   }
   return { text: translated, usage: result.usage };
 }
@@ -1085,8 +1085,7 @@ async function translateOutputIndexTemplate(
 function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
   const values = [
     RELEASES_MARKER,
-    // The entry template travels with the summary. Its labels are meant to be
-    // translated; what separates and names its parts is not.
+    // A new index translates both templates while preserving their boundary.
     ENTRY_TEMPLATE_SEPARATOR,
     "{{projectName}}",
     "{{environment}}",

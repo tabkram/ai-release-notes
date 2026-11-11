@@ -293,9 +293,10 @@ export async function createOrUpdateOutputIndex(params: {
       params.format
     );
     assertOutputIndexStructure(normalizedExisting, params.outputPath, params.format);
-    // The entry template is read from its file on every run, so an index never
-    // has to carry a copy of it: editing the file is what changes the shape.
-    const { entryTemplate } = await loadOutputIndexEntryTemplate(params);
+    const entry = await loadEntryTemplate(params.entryTemplatePath, params.format);
+    const entryTemplate = params.translateTemplate
+      ? await params.translateTemplate(entry)
+      : entry;
 
     // A generation owns this release only. Historical entries may have been
     // translated or edited by hand, so their blocks stay byte-for-byte intact.
@@ -475,13 +476,7 @@ function lineEnding(content: string): string {
  */
 export const ENTRY_TEMPLATE_SEPARATOR = "__AI_RELEASE_NOTES_PART__";
 
-/**
- * The summary template to render, and the entry shape to list releases with.
- *
- * The entry shape is not configurable, so it never comes from the summary
- * template. Both are translated in one pass, then split apart again: only the
- * summary is rendered, and the entry shape is stored in the index.
- */
+/** Translate both templates together when creating an index. */
 async function loadOutputIndexEntryTemplate(params: {
   templatePath?: string;
   entryTemplatePath?: string;

@@ -106,14 +106,16 @@ outputIndex:
     entryTemplate: ./templates/entry.html
 ```
 
-The entry template is read from its file on every run and translated together
-with the summary template, so an index never carries a copy of it: editing the
-file is what changes the shape.
+The entry template is read from its file on every run. Creating a localized
+index translates the summary and entry templates together. Updating an existing
+index translates only the entry template: the page and its CSS are not sent to
+the model again. One source template per purpose serves every language, with no
+localized files or additional configuration. Release-note generation and
+translation are unchanged.
 
 Each entry stores what the index knows about its release — environment, versions,
-date, link — in a comment marker, and the whole list is rendered again on every
-run. Edit the entry template, or switch the index to another language, and the
-entire history is relabelled at the next release. The list is bounded by
+date, link — in a comment marker. A run inserts or updates its own release;
+historical entries keep their reviewed wording and formatting. The list is bounded by
 `<!-- ai-release-notes:releases -->` and `<!-- ai-release-notes:/releases -->`;
 everything outside those two lines belongs to the summary template.
 
