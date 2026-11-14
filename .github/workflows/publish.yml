@@ -3,32 +3,66 @@ name: Publish to NPM
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish, for example v0.5.3
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: npm-publish
+  group: npm-publish-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      PRERELEASE: ${{ github.event.release.prerelease }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout CI configuration
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Read CI configuration
+        id: config
+        uses: ./.github/actions/config
+
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name || inputs.tag }}
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ steps.config.outputs.node-version }}
           package-manager-cache: false
-          registry-url: https://registry.npmjs.org
+          registry-url: ${{ steps.config.outputs.registry }}
 
-      - name: Update npm for trusted publishing
-        run: npm install --global npm@latest
+      - name: Install npm with OIDC support
+        env:
+          NPM_VERSION: ${{ steps.config.outputs.npm-version }}
+        run: npm install --global "npm@$NPM_VERSION" --ignore-scripts
+
+      - name: Verify release version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "${RELEASE_TAG#v}" != "$VERSION" ]]; then
+            echo "::error::Release tag $RELEASE_TAG does not match package version $VERSION"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -36,30 +70,21 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build
 
-      - name: Verify release tag matches package version
+      - name: Publish to npm using OIDC
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PUBLISH_ACCESS: ${{ steps.config.outputs.publish-access }}
+          LATEST_TAG: ${{ steps.config.outputs.latest-tag }}
+          PRERELEASE_TAG: ${{ steps.config.outputs.prerelease-tag }}
         run: |
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          if [ "${RELEASE_TAG#v}" != "$PACKAGE_VERSION" ]; then
-            echo "Release tag $RELEASE_TAG does not match package version $PACKAGE_VERSION."
-            exit 1
-          fi
-
-      - name: Verify trusted publishing prerequisites
-        run: |
-          echo "npm $(npm --version) on node $(node --version)"
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "::error::No OIDC token available. Trusted publishing needs 'id-token: write' permission."
-            exit 1
-          fi
-
-      - name: Publish package to npm
-        run: |
-          if ! npm publish; then
-            echo "::error::npm publish failed. An E404 on PUT means npm rejected the credentials, not that the package is missing: confirm the trusted publisher on npmjs.com (package ai-release-notes -> Settings -> Trusted publisher -> GitHub Actions, repository tabkram/ai-release-notes, workflow publish.yml)."
-            exit 1
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$PRERELEASE" == "true" || "$VERSION" == *-* ]]; then
+            npm publish --access "$PUBLISH_ACCESS" --tag "$PRERELEASE_TAG"
+          else
+            npm publish --access "$PUBLISH_ACCESS" --tag "$LATEST_TAG"
           fi

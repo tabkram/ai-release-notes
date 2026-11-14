@@ -2,6 +2,8 @@
 
 Thanks for helping improve ai-release-notes.
 
+For npm releases, PR canaries and trusted publisher setup, see [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Before submitting a change
 
 - Add or update tests for behavior changes.

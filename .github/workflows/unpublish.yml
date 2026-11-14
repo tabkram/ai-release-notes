@@ -1,40 +1,56 @@
-name: Unpublish from npm
+name: Unpublish from NPM with 2FA
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Prerelease version(s) to unpublish (comma-separated)
+        description: 'Exact canary, dev, alpha, beta or rc versions to delete, comma-separated'
         required: true
         type: string
       confirm:
-        description: Type "I confirm to unpublish" to continue
+        description: 'Type I confirm to unpublish'
         required: true
         type: string
-      force:
-        description: Pass --force to npm unpublish
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-publish
+  group: manual-npm-unpublish
   cancel-in-progress: false
 
 jobs:
   unpublish:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Unpublish package versions
-        uses: ./.github/actions/unpublish
         with:
-          versions: ${{ inputs.version }}
-          confirm: ${{ inputs.confirm }}
-          force: ${{ inputs.force }}
-          npm_token: ${{ secrets.NPM_TOKEN }}
+          persist-credentials: false
+
+      - name: Read CI configuration
+        id: config
+        uses: ./.github/actions/config
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.config.outputs.node-version }}
+          package-manager-cache: false
+
+      - name: Install npm
+        env:
+          NPM_VERSION: ${{ steps.config.outputs.npm-version }}
+        run: npm install --global "npm@$NPM_VERSION" --ignore-scripts
+
+      - name: Unpublish with browser 2FA
+        env:
+          VERSIONS: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: node .github/scripts/manual-unpublish.cjs unpublish
+
+      - name: Revoke npm session and remove temporary credentials
+        if: always()
+        run: node .github/scripts/manual-unpublish.cjs cleanup

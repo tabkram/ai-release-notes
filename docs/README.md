@@ -11,6 +11,7 @@
 | [Instructions](instructions.md) | What the model is told to write, and what it cannot be told |
 | [Programmatic API](api.md) | Using the package as a library |
 | [CI/CD integration](ci-cd.md) | GitHub Actions, secrets, non-interactive runs |
+| [Package deployment](../DEPLOYMENT.md) | This repository's npm releases, PR canaries and OIDC setup |
 
 Also: the annotated [example configuration](../examples/.ai-release-notes.yml)
 and its [walkthrough](../examples/README.md), and the
