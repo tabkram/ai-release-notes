@@ -104,3 +104,25 @@ test("a zero initial delay is supported", async t => {
   await callLLM("mistral", { maxRetries: 1, initialRetryDelayMs: 0 }, "system", "release");
   assert.deepEqual(waits, [0]);
 });
+
+test("large initial retry delays stay within Node's timer limit", async t => {
+  const { bodies, waits } = mockProvider(t, [{ status: 429 }, { status: 200 }]);
+  await callLLM("mistral", { maxRetries: 1, initialRetryDelayMs: 3_000_000_000 }, "system", "release");
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(waits, [2_147_483_647]);
+});
+
+test("exponential retry delays saturate instead of overflowing Node's timers", async t => {
+  const { bodies, waits } = mockProvider(t, [{ status: 429 }, { status: 429 }, { status: 429 }, { status: 200 }]);
+  await callLLM("mistral", { maxRetries: 3, initialRetryDelayMs: 1_500_000_000 }, "system", "release");
+  assert.equal(bodies.length, 4);
+  assert.deepEqual(waits, [1_500_000_000, 2_147_483_647, 2_147_483_647]);
+});
+
+for (const headers of [{ "retry-after-ms": "3000000000" }, { "retry-after": "3000000" }]) {
+  test(`large ${Object.keys(headers)[0]} values stay within Node's timer limit`, async t => {
+    const { waits } = mockProvider(t, [{ status: 429, headers }, { status: 200 }]);
+    await callLLM("mistral", { maxRetries: 1, initialRetryDelayMs: 5000 }, "system", "release");
+    assert.deepEqual(waits, [2_147_483_647]);
+  });
+}

@@ -582,13 +582,10 @@ function languageCode(language: string): string {
   return language.toLowerCase().split(/[-_]/, 1)[0];
 }
 
-/** Models occasionally wrap an HTML template in a Markdown code fence. */
+/** Unwrap a complete code fence around an HTML document or entry fragment. */
 export function unwrapHtmlDocumentCodeFence(content: string): string {
-  const openingFence = /^\s*```html?\s*\r?\n(?=\s*<!doctype html|\s*<html\b)/i;
-  if (!openingFence.test(content)) return content;
-  return content
-    .replace(openingFence, "")
-    .replace(/\r?\n```\s*$/, "");
+  const fenced = /^\s*```html?[ \t]*\r?\n(?=\s*<)([\s\S]*?)\r?\n```\s*$/i.exec(content);
+  return fenced ? fenced[1] : content;
 }
 
 /**

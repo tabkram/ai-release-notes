@@ -61,6 +61,8 @@ the first wait in milliseconds, then doubles it for each retry: `5000` means
 5, 10, 20, 40, then 80 seconds with five retries. A longer valid `Retry-After`
 or `retry-after-ms` value from the provider takes precedence over that wait.
 Both settings accept non-negative integers, including a zero initial delay.
+With a custom initial delay, waits are capped at Node's timer limit of
+2,147,483,647 milliseconds (about 24.9 days), including provider retry headers.
 
 When `initialRetryDelayMs` is omitted, the SDK's existing retry strategy is
 preserved, including its usual two-second initial backoff and handling of retry

@@ -6,7 +6,28 @@ import { join } from "node:path";
 import {
   discoverOutputIndexLanguages,
   updateOutputIndexes,
+  unwrapHtmlDocumentCodeFence,
 } from "../src/output-index.js";
+
+test("unwraps fenced HTML documents and entry fragments without losing template slots", () => {
+  for (const html of [
+    '<!doctype html>\n<html><body>{{releases}}</body></html>',
+    '<section><h2>Version {{toVersion}}</h2><a href="{{href}}">Lire les notes</a></section>',
+    '<!-- entry -->\n<article>{{environment}} · {{date}}</article>',
+  ]) {
+    assert.equal(unwrapHtmlDocumentCodeFence("```html\n" + html + "\n```"), html);
+    assert.equal(unwrapHtmlDocumentCodeFence(html), html);
+  }
+});
+
+test("preserves incomplete fences and code blocks inside an HTML template", () => {
+  for (const html of [
+    '```html\n<section>{{toVersion}}</section>',
+    '<section>\n```html\n<code>example</code>\n```\n</section>',
+  ]) {
+    assert.equal(unwrapHtmlDocumentCodeFence(html), html);
+  }
+});
 
 test("discovers indexes in previously generated language folders", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ai-release-indexes-"));
@@ -426,8 +447,11 @@ for (const format of ["html", "markdown"] as const) {
         languages: ["fr"], primaryLanguage: "en",
         translateTemplate: async (template: string) => {
           requests.push(template);
-          return template.replace("Releases", "Versions").replace("Release {{toVersion}}", "Version {{toVersion}}")
+          const translated = template.replace("Releases", "Versions").replace("Release {{toVersion}}", "Version {{toVersion}}")
             .replace("Changes since", "Modifications depuis").replace("Read release notes", "Lire les notes de version");
+          return format === "html"
+            ? unwrapHtmlDocumentCodeFence("```html\n" + translated + "\n```")
+            : translated;
         },
       };
       await updateOutputIndexes(params);
@@ -439,6 +463,7 @@ for (const format of ["html", "markdown"] as const) {
       assert.equal(requests.length, 2);
       assert.equal(requests[1], entrySource);
       const after = await readFile(index, "utf8");
+      assert.doesNotMatch(after, /```/);
       const firstEntry = before.indexOf('<!-- ai-release-notes:release {');
       const end = before.indexOf('<!-- ai-release-notes:/releases -->');
       assert.equal(after.slice(0, firstEntry), before.slice(0, firstEntry));

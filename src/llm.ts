@@ -125,8 +125,12 @@ export async function callLLM(
   };
 }
 
+// Node turns larger timer delays into 1 ms rather than waiting longer.
+const MAX_RETRY_DELAY_MS = 2_147_483_647;
+
 async function retryRequest<T>(request: () => Promise<T>, maxRetries: number, initialDelayMs: number): Promise<T> {
   const errors: unknown[] = [];
+  let backoffMs = Math.min(initialDelayMs, MAX_RETRY_DELAY_MS);
   while (true) {
     try {
       return await request();
@@ -149,9 +153,12 @@ async function retryRequest<T>(request: () => Promise<T>, maxRetries: number, in
         const seconds = Number.parseFloat(retryAfter);
         retryAfterMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
       }
-      const backoffMs = initialDelayMs * 2 ** (errors.length - 1);
-      const delayMs = Math.max(backoffMs, Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : 0);
+      const delayMs = Math.min(
+        MAX_RETRY_DELAY_MS,
+        Math.max(backoffMs, Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : 0)
+      );
       await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      backoffMs = Math.min(backoffMs * 2, MAX_RETRY_DELAY_MS);
     }
   }
 }
