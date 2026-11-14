@@ -7,6 +7,7 @@
 | [Promoting a release](promote.md) | `promote`, merging a range, environment folders |
 | [Asking for a change](prompt.md) | `prompt`, revising notes already written, CI mode |
 | [Configuration](configuration.md) | `.ai-release-notes.yml`, output paths, indexes, templates |
+| [Caching](caching.md) | Local responses, provider prompt caching, TTLs, bypass, recovery and official provider docs |
 | [Instructions](instructions.md) | What the model is told to write, and what it cannot be told |
 | [Programmatic API](api.md) | Using the package as a library |
 | [CI/CD integration](ci-cd.md) | GitHub Actions, secrets, non-interactive runs |

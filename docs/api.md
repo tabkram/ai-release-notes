@@ -31,6 +31,11 @@ console.log(result.html);
 
 `generateFromChangelog(...)` takes a raw changelog instead of reading git.
 
+Model entry points accept `cache: false` to force a fresh response, `cacheTtl`
+to override local expiry, and `promptCache`/`promptCacheTtl` to control provider
+cache options. See [caching](caching.md) for compatibility, token reporting and
+partial results exposed by `GenerationError`.
+
 Model entry points also accept `maxRetries` and `initialRetryDelayMs` as optional
 provider overrides, with the same precedence as `model` and `maxTokens`. For
 example, `{ maxRetries: 5, initialRetryDelayMs: 5000 }` starts retries after five

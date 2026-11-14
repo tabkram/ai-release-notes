@@ -14,6 +14,11 @@ projectName: ACME Platform
 
 provider: anthropic
 
+# Complete response cache, independent of provider prompt caching.
+cache:
+  enabled: true
+  ttl: 7d
+
 providers:
   anthropic:
     model: claude-sonnet-4-20250514
@@ -22,11 +27,22 @@ providers:
     # initialRetryDelayMs: 5000
     temperature: 0.3
     maxTokens: 4000
+    # Provider prompt cache, separate from the local response cache above.
+    # Claude accepts 5m or 1h. Longer cache writes cost more.
+    promptCache:
+      enabled: true
+      ttl: 1h
 
   openai:
     model: gpt-4o
     temperature: 0.3
     maxTokens: 4000
+    # gpt-4o uses automatic prompt caching; it has no TTL override.
+    promptCache:
+      enabled: true
+      # To set ttl: 12h here, first change the model above to gpt-5.6 or newer.
+
+# Provider compatibility and official docs: ../docs/caching.md
 
 # ─────────────────────────────────────────
 # Project-specific prompt config

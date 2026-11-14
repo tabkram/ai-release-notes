@@ -81,6 +81,13 @@ export function resolveProviderConfig(
       maxTokens: overrides.maxTokens,
       maxRetries: overrides.maxRetries,
       initialRetryDelayMs: overrides.initialRetryDelayMs,
+      promptCache: overrides.promptCache !== undefined || overrides.promptCacheTtl !== undefined
+        ? {
+            ...configured.promptCache,
+            ...(overrides.promptCache !== undefined ? { enabled: overrides.promptCache } : {}),
+            ...(overrides.promptCacheTtl !== undefined ? { ttl: overrides.promptCacheTtl } : {}),
+          }
+        : undefined,
     }).filter(([, value]) => value !== undefined)
   );
 
@@ -117,31 +124,52 @@ export async function createDefaultConfig(targetPath: string): Promise<void> {
 
 provider: openai
 
+# Complete responses are reused locally. Use --no-cache to force model calls.
+cache:
+  enabled: true
+  ttl: 7d
+
 providers:
   openai:
     model: gpt-4o
     temperature: 0.3
     maxTokens: 4000
+    # gpt-4o uses automatic prompt caching; it has no TTL override.
+    # promptCache:
+    #   enabled: true
+    # For a configurable TTL, choose a compatible model; see docs/caching.md.
 
   anthropic:
     model: claude-sonnet-4-20250514
     temperature: 0.3
     maxTokens: 4000
+    # Optional provider prompt cache: 5m or 1h. Longer writes cost more.
+    # promptCache:
+    #   enabled: true
+    #   ttl: 1h
 
   mistral:
     model: mistral-large-latest
     temperature: 0.3
     maxTokens: 4000
+    # Prompt cache keys are enabled automatically; Mistral exposes no TTL.
+    # promptCache:
+    #   enabled: false
 
   google:
     model: gemini-1.5-pro
     temperature: 0.3
     maxTokens: 4000
+    # For an explicit TTL, first select a compatible Gemini 2.5 or 3 model.
+    # promptCache:
+    #   enabled: true
+    #   ttl: 7d
 
   ollama:
     baseURL: http://localhost:11434/v1
     model: llama3.1
     temperature: 0.3
+    # No prompt-cache TTL through this endpoint; local response caching works.
 
 # ─────────────────────────────────────────
 # Prompt customization (optional)

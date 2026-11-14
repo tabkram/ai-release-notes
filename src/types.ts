@@ -5,6 +5,7 @@
 import { z } from "zod";
 
 import type { ReleaseFormat } from "./release-document.js";
+import { CacheConfigSchema, PromptCacheConfigSchema, type CacheOverrides } from "./cache/config.js";
 
 // ─────────────────────────────────────────
 // Commit types
@@ -31,6 +32,7 @@ export const ProviderConfigSchema = z.object({
   maxTokens: z.number().positive().optional(),
   maxRetries: z.number().int().nonnegative().optional(),
   initialRetryDelayMs: z.number().int().nonnegative().optional(),
+  promptCache: PromptCacheConfigSchema.optional(),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -43,6 +45,8 @@ export interface ProviderOverrides {
   maxTokens?: number;
   maxRetries?: number;
   initialRetryDelayMs?: number;
+  promptCache?: boolean;
+  promptCacheTtl?: string;
 }
 
 export type ProviderName =
@@ -140,6 +144,7 @@ export const ReleaseNotesConfigSchema = z.object({
   git: GitConfigSchema.optional(),
   output: OutputsConfigSchema.optional(),
   outputIndex: OutputIndexesConfigSchema.optional(),
+  cache: CacheConfigSchema.optional(),
 });
 
 export type ReleaseNotesConfig = z.infer<typeof ReleaseNotesConfigSchema>;
@@ -157,7 +162,7 @@ export interface ContextFile {
 // Generation options
 // ─────────────────────────────────────────
 
-export interface GenerateOptions extends ProviderOverrides {
+export interface GenerateOptions extends ProviderOverrides, CacheOverrides {
   /** Previous version tag (e.g. "v1.0.0") */
   fromVersion: string;
   /** Current version tag (e.g. "v1.1.0") */
@@ -217,6 +222,7 @@ export interface GenerateResult {
     commitCount: number;
     contextFiles?: string[];
     usage: GenerationUsage;
+    outputs?: GenerationOutput[];
   };
 }
 
@@ -226,4 +232,13 @@ export interface GenerationUsage {
   totalTokens: number;
   modelCalls: number;
   durationMs: number;
+  cacheHits?: number;
+  coalescedCalls?: number;
+  providerCacheReadTokens?: number;
+  providerCacheWriteTokens?: number;
+}
+
+export interface GenerationOutput {
+  language: string;
+  status: "generated" | "cached" | "failed" | "not-attempted";
 }

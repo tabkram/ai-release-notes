@@ -9,14 +9,24 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createMistral } from "@ai-sdk/mistral";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { resolve } from "node:path";
 import type { ProviderName, ProviderConfig } from "./types.js";
+import {
+  modelCacheKey, readModelCache, writeModelCache, shareModelRequest, prepareProviderCache, validateProviderCache,
+  type ModelCacheOptions, type ProviderCacheContext, type ProviderCacheRequest,
+} from "./cache/index.js";
 
 export interface LLMCallResult {
   text: string;
+  finishReason?: string;
   usage: {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    cacheHits?: number;
+    coalescedCalls?: number;
+    providerCacheReadTokens?: number;
+    providerCacheWriteTokens?: number;
   };
 }
 
@@ -32,13 +42,28 @@ const API_KEY_ENV_VARS: Record<ProviderName, string> = {
   ollama: "OLLAMA_API_KEY",
 };
 
+const DEFAULT_MODELS: Record<ProviderName, string> = {
+  openai: "gpt-4o",
+  anthropic: "claude-sonnet-4-20250514",
+  mistral: "mistral-large-latest",
+  google: "gemini-1.5-pro",
+  "azure-openai": "gpt-4o",
+  ollama: "llama3.1",
+};
+
+/** Resolve defaults and reject unsupported cache settings before any work is billed. */
+export function resolveLLMConfig(provider: ProviderName, config: ProviderConfig): ProviderConfig {
+  const resolved = { ...config, model: config.model || DEFAULT_MODELS[provider] };
+  validateProviderCache(provider, resolved);
+  return resolved;
+}
+
 /**
  * Get API key for a specific provider from environment variables.
  * Only the active provider's key is required.
  */
-function getApiKey(providerName: ProviderName): string {
+function getApiKey(providerName: ProviderName, key: string | undefined): string {
   const envVar = API_KEY_ENV_VARS[providerName];
-  const key = process.env[envVar];
 
   if (!key && providerName !== "ollama") {
     throw new LLMError(
@@ -98,29 +123,89 @@ export async function callLLM(
   providerName: ProviderName,
   config: ProviderConfig,
   system: string,
-  user: string
+  user: string,
+  cache: ModelCacheOptions | false = false
 ): Promise<LLMCallResult> {
-  const apiKey = getApiKey(providerName);
-  const model = createModel(providerName, config, apiKey);
+  config = resolveLLMConfig(providerName, config);
+  const apiKey = process.env[API_KEY_ENV_VARS[providerName]];
+  const request = () => requestLLM({
+    provider: providerName, config, system, apiKey: getApiKey(providerName, apiKey), local: cache,
+  }, user);
+  if (!cache) return request();
 
-  const request = () => generateText({
-    model,
-    system,
-    prompt: user,
-    temperature: config.temperature ?? 0.3,
-    maxOutputTokens: config.maxTokens ?? 4000,
-    maxRetries: config.initialRetryDelayMs === undefined ? config.maxRetries : 0,
+  const key = modelCacheKey(providerName, config, system, user);
+  // Register before disk I/O so even a delayed cache miss joins the same work.
+  const { value, shared } = await shareModelRequest({
+    responseKey: key,
+    directory: resolve(cache.directory),
+    ttlMs: cache.ttlMs,
+    // These affect execution rather than the persisted answer's fingerprint.
+    apiKey,
+    maxRetries: config.maxRetries ?? 2,
+    initialRetryDelayMs: config.initialRetryDelayMs,
+    promptCacheEnabled: config.promptCache?.enabled ?? true,
+    promptCacheTtl: config.promptCache?.ttl,
+    promptCacheModel: config.promptCache?.model,
+  }, async () => {
+    const text = await readModelCache(cache, key);
+    if (text !== undefined) {
+      return { text, finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheHits: 1 } };
+    }
+    const result = await request();
+    if (result.text.trim() && result.finishReason === "stop") {
+      await writeModelCache(cache, key, result.text);
+    }
+    return result;
   });
-  const { text, usage } = config.initialRetryDelayMs === undefined
+
+  if (!shared || value.usage.cacheHits) return value;
+  return {
+    ...value,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, coalescedCalls: 1 },
+  };
+}
+
+async function requestLLM(context: ProviderCacheContext, user: string): Promise<LLMCallResult> {
+  const { provider: providerName, config, apiKey } = context;
+  let providerCache = await prepareProviderCache(context);
+  const cacheWriteTokens = providerCache.cacheWriteTokens;
+  const model = createModel(providerName, config, apiKey, providerCache);
+
+  const request = async (): Promise<Awaited<ReturnType<typeof generateText>>> => {
+    try {
+      return await generateText({
+        model,
+        system: providerCache.system,
+        prompt: user,
+        providerOptions: providerCache.providerOptions,
+        temperature: config.temperature ?? 0.3,
+        maxOutputTokens: config.maxTokens ?? 4000,
+        maxRetries: config.initialRetryDelayMs === undefined ? config.maxRetries : 0,
+      });
+    } catch (error) {
+      const recovered = await providerCache.recover?.(error);
+      if (recovered) {
+        providerCache = recovered;
+        return request();
+      }
+      throw error;
+    }
+  };
+  const { text, usage, finishReason } = config.initialRetryDelayMs === undefined
     ? await request()
     : await retryRequest(request, config.maxRetries ?? 2, config.initialRetryDelayMs);
 
   return {
     text,
+    finishReason,
     usage: {
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
       totalTokens: usage.totalTokens ?? 0,
+      ...(usage.inputTokenDetails.cacheReadTokens !== undefined
+        ? { providerCacheReadTokens: usage.inputTokenDetails.cacheReadTokens } : {}),
+      ...(usage.inputTokenDetails.cacheWriteTokens !== undefined || cacheWriteTokens !== undefined
+        ? { providerCacheWriteTokens: (usage.inputTokenDetails.cacheWriteTokens ?? 0) + (cacheWriteTokens ?? 0) } : {}),
     },
   };
 }
@@ -166,35 +251,38 @@ async function retryRequest<T>(request: () => Promise<T>, maxRetries: number, in
 function createModel(
   providerName: ProviderName,
   config: ProviderConfig,
-  apiKey: string
+  apiKey: string,
+  providerCache: ProviderCacheRequest
 ) {
+  const modelId = config.model || DEFAULT_MODELS[providerName];
   switch (providerName) {
     case "openai": {
-      const openai = createOpenAI({ apiKey });
-      return openai(config.model || "gpt-4o");
+      const openai = createOpenAI({ apiKey, fetch: providerCache.fetch });
+      return openai(modelId);
     }
 
     case "anthropic": {
       const anthropic = createAnthropic({ apiKey });
-      return anthropic(config.model || "claude-sonnet-4-20250514");
+      return anthropic(modelId);
     }
 
     case "mistral": {
-      const mistral = createMistral({ apiKey });
-      return mistral(config.model || "mistral-large-latest");
+      const mistral = createMistral({ apiKey, fetch: providerCache.fetch });
+      return mistral(modelId);
     }
 
     case "google": {
       const google = createGoogleGenerativeAI({ apiKey });
-      return google(config.model || "gemini-1.5-pro");
+      return google(modelId);
     }
 
     case "azure-openai": {
       const azure = createOpenAI({
         apiKey,
         baseURL: resolveBaseURL(providerName, config),
+        fetch: providerCache.fetch,
       });
-      return azure(config.model || "gpt-4o");
+      return azure(modelId);
     }
 
     case "ollama": {
@@ -202,7 +290,7 @@ function createModel(
         apiKey: apiKey || "ollama",
         baseURL: resolveBaseURL(providerName, config) || "http://localhost:11434/v1",
       });
-      return ollama(config.model || "llama3.1");
+      return ollama(modelId);
     }
 
     default:

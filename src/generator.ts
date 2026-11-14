@@ -2,10 +2,12 @@
  * Main generator orchestrator
  */
 
+import { addModelUsage } from "./model-usage.js";
 import { loadConfig, resolveProviderAlias, resolveProviderConfig } from "./config.js";
 import { getChangelog, parseCommits } from "./git.js";
 import { resolveReleaseDate } from "./release-date.js";
-import { callLLM } from "./llm.js";
+import { callLLM, resolveLLMConfig } from "./llm.js";
+import { resolveCacheConfig } from "./cache/index.js";
 import {
   buildSystemPrompt,
   buildTranslationSystemPrompt,
@@ -15,13 +17,17 @@ import {
 } from "./prompts/builder.js";
 import { DEFAULT_RELEASE_NOTE_TEMPLATE_PATH, renderReleaseNoteHtml } from "./release.js";
 import { loadContextFiles } from "./context.js";
-import type { GenerateOptions, GenerateResult, GenerationUsage } from "./types.js";
+import type { GenerateOptions, GenerateResult, GenerationOutput, GenerationUsage } from "./types.js";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { resolve } from "path";
 
 export class GenerationError extends Error {
-  constructor(message: string, public readonly metadata: GenerateResult["metadata"]) {
+  constructor(
+    message: string,
+    public readonly metadata: GenerateResult["metadata"],
+    public readonly completed: GenerateResult["localized"] = []
+  ) {
     super(message);
     this.name = "GenerationError";
   }
@@ -79,7 +85,8 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
         `Add it to your config file under providers.${providerName}`
     );
   }
-  const providerConfig = resolveProviderConfig(configuredProvider, options);
+  const providerConfig = resolveLLMConfig(providerName, resolveProviderConfig(configuredProvider, options));
+  const cache = resolveCacheConfig(config.cache, options);
 
   // ── Extract commits ──
   let rawCommits: string[];
@@ -175,6 +182,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     modelCalls: 0,
     durationMs: 0,
   };
+  const outputs: GenerationOutput[] = languages
+    .filter((language, index) => index === 0 || !onlyLanguage || language === onlyLanguage)
+    .map(language => ({ language, status: "not-attempted" }));
   const errorMetadata = {
     fromVersion: options.fromVersion,
     toVersion: options.toVersion,
@@ -184,36 +194,45 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     commitCount: parsedCommits.length,
     contextFiles: contextFiles.map((cf) => cf.path),
     usage,
+    outputs,
   };
   let primaryMarkdown = "";
+  let activeOutput = outputs[0];
   const translatedReleases: GenerateResult["localized"] = [];
   try {
-    const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt);
-    addUsage(usage, llmResult.usage);
+    const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt, cache);
+    addModelUsage(usage, llmResult.usage);
     primaryMarkdown = stripEnclosingCodeFence(llmResult.text);
+    activeOutput.status = llmResult.usage.cacheHits ? "cached" : "generated";
 
     const translationInstructions = await resolveInstructions(config.prompt?.instructions);
-    for (const language of languages.slice(1)) {
-      // Asking for one language still writes the first one: it is what the
-      // others are translated from, so it is generated and then left out.
-      if (onlyLanguage && language !== onlyLanguage) continue;
+    for (const output of outputs.slice(1)) {
+      activeOutput = output;
+      const language = output.language;
       const translatedRelease = await callLLM(
         providerName,
         providerConfig,
         await buildTranslationSystemPrompt(language, translationInstructions),
-        primaryMarkdown
+        primaryMarkdown,
+        cache
       );
-      addUsage(usage, translatedRelease.usage);
+      addModelUsage(usage, translatedRelease.usage);
+      activeOutput.status = translatedRelease.usage.cacheHits ? "cached" : "generated";
       translatedReleases.push({
         language,
         markdown: stripEnclosingCodeFence(translatedRelease.text),
       });
     }
   } catch (error) {
+    if (activeOutput.status === "not-attempted") activeOutput.status = "failed";
     usage.durationMs = Date.now() - startedAt;
     throw new GenerationError(
       error instanceof Error ? error.message : String(error),
-      errorMetadata
+      errorMetadata,
+      [
+        ...(primaryMarkdown ? [{ language: primaryLanguage, markdown: primaryMarkdown }] : []),
+        ...translatedReleases,
+      ]
     );
   }
 
@@ -240,6 +259,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       commitCount: parsedCommits.length,
       contextFiles: contextFiles.map((cf) => cf.path),
       usage,
+      outputs,
     },
   };
 
@@ -313,14 +333,4 @@ export async function generateFromChangelog(
   options: Omit<GenerateOptions, "changelog" | "changelogFile">
 ): Promise<GenerateResult> {
   return generate({ ...options, changelog });
-}
-
-function addUsage(
-  total: GenerationUsage,
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number }
-): void {
-  total.inputTokens += usage.inputTokens;
-  total.outputTokens += usage.outputTokens;
-  total.totalTokens += usage.totalTokens;
-  total.modelCalls += 1;
 }

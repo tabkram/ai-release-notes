@@ -3,11 +3,12 @@
  * CLI entry point
  */
 
-import { Command, InvalidArgumentError } from "commander";
+import { addModelUsage } from "../model-usage.js";
+import { Command, InvalidArgumentError, type OptionValues } from "commander";
 import chalk from "chalk";
 import { generate, GenerationError } from "../generator.js";
-import { callLLM } from "../llm.js";
-import { RELEASES_MARKER } from "../release.js";
+import { translateOutputIndexTemplate } from "../output-index-translation.js";
+import { clearModelCache, parseCacheTtl, resolveCacheConfig, type CacheOverrides } from "../cache/index.js";
 import {
   CONFIG_DIR,
   DEFAULT_CONFIG_NAME,
@@ -17,11 +18,7 @@ import {
   resolveProviderAlias,
   resolveProviderConfig,
 } from "../config.js";
-import {
-  ENTRY_TEMPLATE_SEPARATOR,
-  unwrapHtmlDocumentCodeFence,
-  updateOutputIndexes,
-} from "../output-index.js";
+import { updateOutputIndexes } from "../output-index.js";
 import { formatOutputPath, isReleaseSpecificPath } from "../output-path.js";
 import { promote, PromotionError } from "../promote.js";
 import {
@@ -40,10 +37,12 @@ import clipboardy from "clipboardy";
 import ora from "ora";
 import type {
   GenerateResult,
+  GenerationUsage,
   OutputIndexConfig,
   PromptSource,
   ProviderConfig,
   ProviderName,
+  ProviderOverrides,
   ReleaseNotesConfig,
 } from "../types.js";
 import { AI_RELEASE_NOTES_VERSION } from "../version.js";
@@ -109,6 +108,30 @@ function nonNegativeIntegerOption(value: string): number {
   return number;
 }
 
+function cacheTtlOption(value: string): string {
+  try {
+    parseCacheTtl(value);
+    return value;
+  } catch (error) {
+    throw new InvalidArgumentError((error as Error).message);
+  }
+}
+
+function modelOverrides(opts: OptionValues): ProviderOverrides & CacheOverrides {
+  return {
+    model: opts.model,
+    temperature: opts.temperature,
+    maxTokens: opts.maxTokens,
+    maxRetries: opts.maxRetries,
+    initialRetryDelayMs: opts.initialRetryDelayMs,
+    baseURL: opts.baseUrl,
+    promptCache: opts.providerCache === false ? false : undefined,
+    promptCacheTtl: opts.providerCacheTtl,
+    cache: opts.cache === false ? false : undefined,
+    cacheTtl: opts.cacheTtl,
+  };
+}
+
 /** Where a prompt comes from, for the verbose report. */
 function describePromptSource(source?: PromptSource): string {
   if (!source) return "built-in defaults";
@@ -147,10 +170,26 @@ function printGenerationSummary(stdout: boolean, result: Pick<GenerateResult, "m
       `🪙 Tokens: ${formatNumber(usage.inputTokens)} input + ${formatNumber(usage.outputTokens)} output = ${formatNumber(usage.totalTokens)} | ${usage.modelCalls} model call${usage.modelCalls === 1 ? "" : "s"}`
     ));
   } else {
-    printStatus(stdout, chalk.gray("🪙 Tokens: no model tokens used (dry run)"));
+    printStatus(stdout, chalk.gray("🪙 Tokens: no model tokens used"));
+  }
+  printCacheUsage(stdout, usage);
+  for (const output of result.metadata.outputs ?? []) {
+    printStatus(stdout, chalk.gray(`   ${output.language}: ${output.status}`));
   }
   if (result.metadata.contextFiles && result.metadata.contextFiles.length > 0) {
     printStatus(stdout, chalk.gray(`📎 Context files: ${result.metadata.contextFiles.join(", ")}`));
+  }
+}
+
+function printCacheUsage(stdout: boolean, usage: GenerationUsage): void {
+  if (usage.cacheHits) {
+    printStatus(stdout, chalk.gray(`📦 Local cache: ${usage.cacheHits} response(s) reused`));
+  }
+  if (usage.coalescedCalls) {
+    printStatus(stdout, chalk.gray(`   Shared requests: ${usage.coalescedCalls} call(s) reused an in-flight response`));
+  }
+  if (usage.providerCacheReadTokens !== undefined || usage.providerCacheWriteTokens !== undefined) {
+    printStatus(stdout, chalk.gray(`   Provider cache: ${formatNumber(usage.providerCacheReadTokens ?? 0)} tokens read, ${formatNumber(usage.providerCacheWriteTokens ?? 0)} written`));
   }
 }
 
@@ -224,6 +263,10 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
+  .option("--no-cache", "Bypass local model cache reads and writes")
+  .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
+  .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
+  .option("--provider-cache-ttl <duration>", "Provider prompt cache lifetime; validated against the selected model")
   .option("--base-url <url>", "Provider base URL override")
   .option("--lang <language>", "Write one configured language only")
   .option("--config <path>", "Path to config file")
@@ -266,12 +309,7 @@ program
         environment: opts.env,
         date: opts.date,
         provider: opts.with,
-        model: opts.model,
-        temperature: opts.temperature,
-        maxTokens: opts.maxTokens,
-        maxRetries: opts.maxRetries,
-        initialRetryDelayMs: opts.initialRetryDelayMs,
-        baseURL: opts.baseUrl,
+        ...modelOverrides(opts),
         language: opts.lang,
         configPath: opts.config,
         changelogFile: opts.changelogFile,
@@ -384,17 +422,11 @@ program
                 generatedResult.metadata.provider as ProviderName,
                 resolveProviderConfig(
                   loadedConfig.providers[generatedResult.metadata.provider] as ProviderConfig,
-                  {
-                    model: opts.model,
-                    temperature: opts.temperature,
-                    maxTokens: opts.maxTokens,
-                    maxRetries: opts.maxRetries,
-                    initialRetryDelayMs: opts.initialRetryDelayMs,
-                    baseURL: opts.baseUrl,
-                  }
-                )
+                  modelOverrides(opts)
+                ),
+                resolveCacheConfig(loadedConfig.cache, modelOverrides(opts))
               );
-              addTemplateUsage(generatedResult.metadata.usage, translated.usage);
+              addModelUsage(generatedResult.metadata.usage, translated.usage);
               return translated.text;
             },
         onUpdated: printOutputIndexUpdate,
@@ -440,6 +472,10 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
+  .option("--no-cache", "Bypass local model cache reads and writes")
+  .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
+  .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
+  .option("--provider-cache-ttl <duration>", "Provider prompt cache lifetime; validated against the selected model")
   .option("--base-url <url>", "Provider base URL override")
   .option("--lang <language>", "Promote one language only")
   .option("--date <date>", 'Release date: "now", "tag", or an ISO date (default: now)')
@@ -469,12 +505,7 @@ program
         toDir: opts.toDir,
         pattern: opts.pattern,
         provider: opts.with,
-        model: opts.model,
-        temperature: opts.temperature,
-        maxTokens: opts.maxTokens,
-        maxRetries: opts.maxRetries,
-        initialRetryDelayMs: opts.initialRetryDelayMs,
-        baseURL: opts.baseUrl,
+        ...modelOverrides(opts),
         language: opts.lang,
         date: opts.date,
         configPath: opts.config,
@@ -521,6 +552,7 @@ program
         }
       }
 
+      printCacheUsage(opts.stdout, result.metadata.usage);
       if (opts.dryRun || opts.stdout) {
         printStatus(opts.stdout, chalk.gray(
           result.metadata.usage.modelCalls === 0
@@ -581,6 +613,10 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
+  .option("--no-cache", "Bypass local model cache reads and writes")
+  .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
+  .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
+  .option("--provider-cache-ttl <duration>", "Provider prompt cache lifetime; validated against the selected model")
   .option("--base-url <url>", "Provider base URL override")
   .option("--config <path>", "Path to config file")
   .option(
@@ -600,12 +636,7 @@ program
         toVersion: opts.to,
         language: opts.lang,
         provider: opts.with,
-        model: opts.model,
-        temperature: opts.temperature,
-        maxTokens: opts.maxTokens,
-        maxRetries: opts.maxRetries,
-        initialRetryDelayMs: opts.initialRetryDelayMs,
-        baseURL: opts.baseUrl,
+        ...modelOverrides(opts),
         configPath: opts.config,
       });
 
@@ -613,7 +644,7 @@ program
       if (opts.verbose) printVerbosePromptDetails(opts.stdout, session);
 
       if (opts.ask.length > 0) {
-        const failures = await runRequestedChanges(session, opts.ask, opts.dryRun, opts.stdout);
+        const failures = await runRequestedChanges(session, opts.ask, opts.stdout);
         await savePromptSession(session, opts.dryRun, opts.stdout);
         // CI asked for something and is entitled to know it did not happen.
         if (failures > 0) process.exit(1);
@@ -652,6 +683,20 @@ program
       console.log(`  ${chalk.green("●")} ${chalk.bold(p.alias.padEnd(10))} → ${p.name.padEnd(14)} ${chalk.gray(p.desc)}`);
     });
     console.log(chalk.gray("\nUse --with <alias> to override the default provider."));
+  });
+
+program.command("cache")
+  .description("Manage the local model response cache")
+  .command("clear")
+  .description("Remove all cached model responses for this project")
+  .action(async () => {
+    try {
+      await clearModelCache();
+      console.log("Local model cache cleared.");
+    } catch (error) {
+      console.error((error as Error).message);
+      process.exitCode = 1;
+    }
   });
 
 program.parse();
@@ -836,7 +881,6 @@ async function answerMessage(
 async function runRequestedChanges(
   session: PromptSession,
   requests: string[],
-  dryRun: boolean,
   stdout = false
 ): Promise<number> {
   let failures = 0;
@@ -892,6 +936,7 @@ function printAnswer(answered: PromptAnswer, stdout = false): void {
   printStatus(stdout, chalk.gray(
     `\n   answered, nothing changed | ${formatNumber(answered.usage.totalTokens)} tokens | ${formatDuration(answered.usage.durationMs)}`
   ));
+  printCacheUsage(stdout, answered.usage);
 }
 
 function errorMessage(error: unknown): string {
@@ -985,6 +1030,7 @@ function printPromptEdits(result: PromptEditResult, stdout = false): number {
     ? " | no model call: the change was resolved locally"
     : ` | ${formatNumber(result.usage.totalTokens)} tokens | ${result.usage.modelCalls} model call${result.usage.modelCalls === 1 ? "" : "s"} | ${formatDuration(result.usage.durationMs)}`;
   printStatus(stdout, chalk.gray(`\n   ${changed} of ${result.edits.length} revised${usage}`));
+  printCacheUsage(stdout, result.usage);
 
   return failed;
 }
@@ -1054,72 +1100,6 @@ function printOutputIndexUpdate(path: string, change: "release" | "languages"): 
   console.log(chalk.green(change === "languages"
     ? "🌐 Refreshed languages in " + path
     : "📚 Updated output index " + path));
-}
-
-async function translateOutputIndexTemplate(
-  template: string,
-  language: string,
-  providerName: ProviderName,
-  providerConfig: ProviderConfig
-) {
-  const protectedTemplate = protectTemplateTokens(template);
-  const result = await callLLM(
-    providerName,
-    providerConfig,
-    "You translate release-summary templates. Return only the translated template. " +
-      "Translate every human-readable sentence into the requested language, but preserve all HTML, CSS, Markdown syntax, URLs, and protected tokens exactly.",
-    `Target language: ${language}\n\nTemplate:\n${protectedTemplate.template}`
-  );
-  const translated = unwrapHtmlDocumentCodeFence(
-    restoreTemplateTokens(result.text, protectedTemplate.tokens)
-  );
-  const missingToken = protectedTemplate.tokens.find(([value]) =>
-    template.includes(value) && !translated.includes(value)
-  );
-  if (missingToken) {
-    throw new Error(`Translated output-index template did not preserve ${missingToken[0]}`);
-  }
-  return { text: translated, usage: result.usage };
-}
-
-function protectTemplateTokens(template: string): { template: string; tokens: Array<[string, string]> } {
-  const values = [
-    RELEASES_MARKER,
-    // A new index translates both templates while preserving their boundary.
-    ENTRY_TEMPLATE_SEPARATOR,
-    "{{projectName}}",
-    "{{environment}}",
-    "{{language}}",
-    "{{languages}}",
-    "{{langages}}",
-    "{{date}}",
-    "{{releases}}",
-    "{{version}}",
-    "{{fromVersion}}",
-    "{{toVersion}}",
-    "{{fromToComparison}}",
-    "{{links}}",
-    "{{href}}",
-  ];
-  const tokens = values.map((value, index) => [value, `__AI_RELEASE_TEMPLATE_TOKEN_${index}__`] as [string, string]);
-  return {
-    template: tokens.reduce((result, [value, token]) => result.replaceAll(value, token), template),
-    tokens,
-  };
-}
-
-function restoreTemplateTokens(template: string, tokens: Array<[string, string]>): string {
-  return tokens.reduce((result, [value, token]) => result.replaceAll(token, value), template);
-}
-
-function addTemplateUsage(
-  total: { inputTokens: number; outputTokens: number; totalTokens: number; modelCalls: number },
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number }
-): void {
-  total.inputTokens += usage.inputTokens;
-  total.outputTokens += usage.outputTokens;
-  total.totalTokens += usage.totalTokens;
-  total.modelCalls += 1;
 }
 
 function formatNumber(value: number): string {

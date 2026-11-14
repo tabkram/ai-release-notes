@@ -16,6 +16,8 @@ Transform your git changelog into clean, business-readable release notes — wit
 
 ## Installation
 
+Requires Node.js 24 or later.
+
 ### Global (CLI usage)
 ```bash
 npm install -g ai-release-notes

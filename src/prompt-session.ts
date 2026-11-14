@@ -14,13 +14,15 @@
  * undone rather than repaired, and a run of requests is reviewed together.
  */
 
+import { addModelUsage } from "./model-usage.js";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { basename, dirname, relative, resolve, sep } from "path";
 import { z } from "zod";
 import { loadConfig, resolveProviderAlias, resolveProviderConfig } from "./config.js";
 import { loadReleaseNoteTemplate, stripEnclosingCodeFence } from "./generator.js";
-import { callLLM, type LLMCallResult } from "./llm.js";
+import { callLLM, resolveLLMConfig, type LLMCallResult } from "./llm.js";
+import { resolveCacheConfig, type CacheOverrides } from "./cache/index.js";
 import {
   discoverReleases,
   formatOutputPath,
@@ -79,7 +81,7 @@ export type EditModelCall = (request: {
   user: string;
 }) => Promise<LLMCallResult>;
 
-export interface PromptSessionOptions extends ProviderOverrides {
+export interface PromptSessionOptions extends ProviderOverrides, CacheOverrides {
   /** Whose release notes are opened: PROD, QUA, DEV... */
   environment: string;
   /** Narrow the session to the releases a range covers. */
@@ -296,9 +298,10 @@ export class PromptSession {
         `Add it to your config file under providers.${provider}`
       );
     }
-    const providerConfig = configuredProvider
-      ? resolveProviderConfig(configuredProvider, options)
+    const providerConfig = configuredProvider && !options.callModel
+      ? resolveLLMConfig(provider, resolveProviderConfig(configuredProvider, options))
       : undefined;
+    const cache = options.callModel ? false : resolveCacheConfig(config.cache, options);
 
     const outputs = config.output
       ? (Array.isArray(config.output) ? config.output : [config.output])
@@ -355,7 +358,7 @@ export class PromptSession {
     }
 
     const callModel: EditModelCall = options.callModel
-      ?? ((request) => callLLM(provider, providerConfig!, request.system, request.user));
+      ?? ((request) => callLLM(provider, providerConfig!, request.system, request.user, cache));
 
     return new PromptSession(config, options.environment, provider, documents, callModel, {
       fromVersion: options.fromVersion,
@@ -511,7 +514,7 @@ export class PromptSession {
           projectName: this.config.projectName,
         }),
       });
-      addUsage(usage, answered.usage);
+      addModelUsage(usage, answered.usage);
       findings.push({
         covers: included.map((document) => coverage(document)).join(", ") || "open-file catalog",
         text: stripEnclosingCodeFence(answered.text).trim(),
@@ -528,7 +531,7 @@ export class PromptSession {
           projectName: this.config.projectName,
         }),
       });
-      addUsage(usage, synthesized.usage);
+      addModelUsage(usage, synthesized.usage);
       text = stripEnclosingCodeFence(synthesized.text).trim();
     }
 
@@ -705,7 +708,7 @@ export class PromptSession {
         continue;
       }
 
-      addUsage(usage, answer.usage);
+      addModelUsage(usage, answer.usage);
       const written = this.applyAnswer(document, answer.text);
       if (typeof written === "string") {
         revised.set(document.path, written);
@@ -932,7 +935,7 @@ export class PromptSession {
             language: plan.language,
           }),
         });
-        addUsage(usage, answer.usage);
+        addModelUsage(usage, answer.usage);
         const fenceless = stripEnclosingCodeFence(answer.text).trim();
         const opening = plan.format === "html"
           ? sanitizeReleaseHtml(fenceless).trim()
@@ -1940,14 +1943,4 @@ function rangeDescription(fromVersion?: string, toVersion?: string): string {
 
 function emptyUsage(): GenerationUsage {
   return { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0, durationMs: 0 };
-}
-
-function addUsage(
-  total: GenerationUsage,
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number }
-): void {
-  total.inputTokens += usage.inputTokens;
-  total.outputTokens += usage.outputTokens;
-  total.totalTokens += usage.totalTokens;
-  total.modelCalls += 1;
 }

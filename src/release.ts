@@ -552,7 +552,7 @@ export function sanitizeReleaseHtml(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(EXECUTABLE_HTML_ELEMENTS, "")
-    .replace(HTML_TAG, (tag, closing: string, name: string, attributes: string) => {
+    .replace(HTML_TAG, (_tag, closing: string, name: string, attributes: string) => {
       const element = name.toLowerCase();
       const allowed = RELEASE_HTML_ELEMENTS[element];
       if (!allowed) return "";

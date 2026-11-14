@@ -43,6 +43,33 @@ For the exact configuration and comments, see the annotated
 [examples guide](../examples/README.md) then walks through a first run, writing
 instructions, templates, and output layouts.
 
+## Caching model requests
+
+Successful model responses are cached locally for seven days by default:
+
+```yaml
+cache:
+  enabled: true
+  ttl: 7d
+
+providers:
+  anthropic:
+    model: claude-sonnet-4-20250514
+    promptCache:
+      enabled: true
+      ttl: 1h
+```
+
+`--no-cache` forces fresh model calls by bypassing local reads and writes.
+`--cache-ttl 30d` overrides the local lifetime; `cache clear` removes local entries.
+Provider prompt caching is separate: `--provider-cache-ttl 1h` overrides the
+selected provider's lifetime, and `--no-provider-cache` disables explicit cache
+options. Automatic server-side caches can remain active.
+
+See [caching](caching.md) for provider/model compatibility, official documentation,
+partial-failure recovery, and API overrides. Unsupported provider TTLs fail
+before sending a model request; durations are never silently shortened.
+
 ## Retrying model requests
 
 Retry settings belong to the selected provider, alongside its model:

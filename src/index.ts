@@ -8,7 +8,11 @@
 export {
   generate,
   generateFromChangelog,
+  GenerationError,
 } from "./generator.js";
+
+export { clearModelCache } from "./cache/index.js";
+export type { CacheConfig, CacheOverrides, ModelCacheOptions } from "./cache/index.js";
 
 export {
   promote,
@@ -121,6 +125,8 @@ export type {
   ReleaseNotesConfig,
   GenerateOptions,
   GenerateResult,
+  GenerationUsage,
+  GenerationOutput,
   OutputConfig,
   OutputIndexConfig,
   PromptConfig,
