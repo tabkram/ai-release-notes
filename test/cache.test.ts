@@ -158,6 +158,31 @@ test("an invalid index translation is evicted so a rerun can recover", async t =
 });
 
 for (const format of ["markdown", "html"] as const) {
+  for (const language of ["en", "fr"]) {
+    test(`${format}: an empty fenced ${language} note is evicted and a return-only rerun recovers`, async t => {
+      const directory = await workspace(t);
+      const configPath = join(directory, "config.yml");
+      await writeFile(configPath, "provider: mistral\nproviders:\n  mistral:\n    maxRetries: 0\nprompt:\n  languages: [en, fr]\n");
+      let invalid = true;
+      const requests = mockModel(t, "mistral", request => {
+        const translating = JSON.stringify(request.body).includes("precise release-notes translator");
+        return modelResponse("mistral", invalid && translating === (language === "fr")
+          ? "```markdown\n\n```" : "# Valid note\n\nA complete improvement.");
+      });
+      const options = { configPath, fromVersion: "v1", toVersion: "v2", environment: "PROD", date: "2026-11-16",
+        changelog: "feat: improvement", format };
+      await assert.rejects(generate(options), error => {
+        assert(error instanceof GenerationError);
+        assert.equal(error.metadata.outputs?.find(output => output.language === language)?.status, "failed");
+        return true;
+      });
+      invalid = false;
+      const recovered = await generate(options);
+      assert.equal(requests.length, 3);
+      assert(recovered.localized.every(release => release.markdown.includes("A complete improvement")));
+    });
+  }
+
   test(`${format}: a failed translation resumes completed languages and --no-cache forces new calls`, async t => {
     const directory = await workspace(t);
     const configPath = join(directory, "config.yml");

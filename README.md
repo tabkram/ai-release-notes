@@ -77,7 +77,7 @@ Files are saved where your configuration says, and the run reports the paths it
 updated together with the tokens it spent.
 
 Existing separate release files resume automatically: each completed language
-is saved immediately. Use `--regenerate` to replace existing notes, including
+is saved immediately. Use `--force` to replace existing notes, including
 legacy files, and add `--no-cache` when fresh model calls are intended.
 
 → [Generating release notes](docs/generate.md) — **CLI options**, `--dry-run`, release dates, context files.

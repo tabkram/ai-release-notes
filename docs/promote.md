@@ -103,7 +103,7 @@ outputs are reported as skipped.
 | `--lang <language>` | Promote one language only |
 | `--date <date>` | Release date: `now` (default), `tag`, or an ISO date |
 | `--config <path>` | Path to config file |
-| `--regenerate` | Replace selected target notes, including legacy files without generation state |
+| `--force` | Replace selected target notes, including legacy files without generation state |
 | `--dry-run` | Show what would be promoted without writing anything |
 | `-v, --verbose` | Show what was promoted, release by release |
 | `--stdout` | Write the promoted notes to the terminal without saving files |
@@ -127,9 +127,9 @@ date and source fingerprints alongside recorded skipped deployments. A partial p
 range past the languages still missing. Configured languages are required when
 the source path has a language placeholder.
 
-`--regenerate` explicitly rebuilds selected targets from the reviewed source
+`--force` explicitly rebuilds selected targets from the reviewed source
 chain, including targets from older versions without generation state. `--no-cache`
-changes only model-response reuse; combine it with `--regenerate` if an opening
+changes only model-response reuse; combine it with `--force` if an opening
 must be written with a fresh model call. Changed promotion sources are reported
 before replacing an existing reviewed target. `--stdout` and `--dry-run` do not
 write output or state files.

@@ -207,10 +207,13 @@ await generate({
 });
 ```
 
-`regenerate: true` replaces selected existing documents, including legacy files.
+`force: true` replaces selected existing documents, including legacy files.
 It is independent of `cache: false`, which bypasses API response caching.
+This replaces `regenerate: true`; the old option is no longer supported.
 `metadata.progressFile` names the shared ledger; output status `reused` identifies a
-final document read from disk. A failed index leaves completed note files
+final document read from disk. An output's `retranslatedFrom` names the primary
+language whose changed content caused an existing translation to be replaced,
+including any manual corrections. A failed index leaves completed note files
 available and its index unfinished for the next invocation. See
 [automatic resumption](generate.md#automatic-resumption) for source changes,
 original dates, and supported output layouts.

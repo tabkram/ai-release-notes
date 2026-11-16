@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { mkdtemp, readFile, rm, writeFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, relative, dirname } from "node:path";
 import YAML from "yaml";
 import { loadReleaseState, recordSkippedRelease } from "../src/release-state.js";
+import { ReleaseProgress, contentHash, type ReleaseTarget } from "../src/release-progress.js";
+import { loadConfig } from "../src/config.js";
 import { promote } from "../src/promote.js";
 import { generate, GenerationError } from "../src/generator.js";
 import { json, mockModel, modelResponse } from "./helpers/mock-model.js";
@@ -60,20 +62,32 @@ for (const format of ["markdown", "html"]) {
     assert.doesNotMatch(JSON.stringify(sidecar), /Manually reviewed filtering/, "State must not duplicate note content");
     const secondEdit = edited.replace("Manually reviewed filtering", "Updated source for translation");
     await writeFile(f.path("en"), secondEdit);
-    await generate(f.options);
+    const refreshed = await generate(f.options);
     assert.equal(await readFile(f.path("en"), "utf8"), secondEdit);
     assert.equal(requests.length, calls + 1, "Only the stale translation must be regenerated");
+    assert.equal(refreshed.metadata.outputs?.find(output => output.language === "fr")?.retranslatedFrom, "en");
     assert.match(JSON.stringify(requests.at(-1)!.body), /Updated source for translation/);
+    const previousTranslation = await readFile(f.path("fr"), "utf8");
+    await writeFile(f.path("en"), secondEdit.replace("Updated source", "Another source edit"));
+    fail = true;
+    await assert.rejects(generate(f.options), error => {
+      assert(error instanceof GenerationError);
+      const output = error.metadata.outputs?.find(output => output.language === "fr");
+      assert.equal(output?.status, "failed");
+      assert.equal(output?.retranslatedFrom, undefined, "Do not report a replacement that failed");
+      return true;
+    });
+    assert.equal(await readFile(f.path("fr"), "utf8"), previousTranslation);
     await assert.rejects(generate({ ...f.options, changelog: "feat: different change" }), /inputs changed/);
   });
 
-  test(`${format}: regenerate replaces legacy documents without a sidecar`, async t => {
+  test(`${format}: force replaces legacy documents without a sidecar`, async t => {
     const f = await setup(t, format);
     mockModel(t, "mistral", () => modelResponse("mistral", english));
     await generate({ ...f.options, language: "en" });
     await rm("notes/QUA/.release-notes-state.json");
     await writeFile(f.path("en"), format === "html" ? "<main><h1>Old release</h1><p>Old content</p></main>" : "# Old release\n\nOld content");
-    await generate({ ...f.options, regenerate: true, language: "en", cache: false });
+    await generate({ ...f.options, force: true, language: "en", cache: false });
     assert.match(await readFile(f.path("en"), "utf8"), /Added filters/);
   });
 }
@@ -92,27 +106,81 @@ test('changing any configured primary language refreshes every secondary languag
   await generate({ ...f.options, language: "fr" });
   assert.equal((await loadReleaseState("notes/QUA/.release-notes-state.json")).releases[0].generation?.status, "pending");
   assert.equal(requests.length, 3, "An explicitly limited run must leave stale secondary languages pending");
-  await generate(f.options);
+  await writeFile(f.path("en"), "# Manually reviewed English wording\n");
+  const refreshed = await generate(f.options);
   assert.equal(requests.length, 5);
+  assert.equal(refreshed.metadata.outputs?.find(output => output.language === "en")?.retranslatedFrom, "fr");
+  assert.equal(refreshed.metadata.outputs?.find(output => output.language === "de")?.retranslatedFrom, "fr");
+  assert.doesNotMatch(await readFile(f.path("en"), "utf8"), /Manually reviewed English/);
   for (const request of requests.slice(3)) assert.match(JSON.stringify(request.body), /Une modification métier/);
   assert.match(await readFile(primary, "utf8"), /Source principale corrigée/);
-  await generate({ ...f.options, cache: false });
+  const reused = await generate({ ...f.options, cache: false });
   assert.equal(requests.length, 5);
+  assert(reused.metadata.outputs?.every(output => output.retranslatedFrom === undefined));
   config.prompt.languages.push("es");
   await writeFile("config.yml", YAML.stringify(config));
   await generate(f.options);
   assert.equal(requests.length, 6, "Adding a secondary language must not regenerate completed notes");
 });
 
-test('incomplete model output never becomes a completed final document', async t => {
+test('incomplete model output never creates a final document', async t => {
   const f = await setup(t, "markdown");
   mockModel(t, "mistral", () => modelResponse("mistral", "# Truncated", 0, "length"));
   await assert.rejects(generate(f.options), /did not complete/);
   await assert.rejects(access(f.path("en")));
 });
 
+for (const language of ["en", "fr"]) {
+  test(`incomplete ${language} output is reported as failed without saving or replacing its final document`, async t => {
+    const f = await setup(t, "markdown");
+    const config = YAML.parse(await readFile("config.yml", "utf8"));
+    delete config.outputIndex;
+    await writeFile("config.yml", YAML.stringify(config));
+    let fail = false;
+    mockModel(t, "mistral", request => {
+      const translating = JSON.stringify(request.body).includes("precise release-notes translator");
+      return modelResponse("mistral", fail && translating === (language === "fr") ? "# Truncated" : english,
+        0, fail && translating === (language === "fr") ? "length" : "stop");
+    });
+    await generate(f.options);
+    const previous = await readFile(f.path(language), "utf8");
+    fail = true;
+    await assert.rejects(generate({ ...f.options, force: true, language }), error => {
+      assert(error instanceof GenerationError);
+      assert.match(error.message, /did not complete/);
+      const output = error.metadata.outputs?.find(output => output.language === language);
+      assert.equal(output?.status, "failed");
+      assert.equal(output?.retranslatedFrom, undefined);
+      return true;
+    });
+    assert.equal(await readFile(f.path(language), "utf8"), previous);
+    assert.equal((await loadReleaseState("notes/QUA/.release-notes-state.json")).releases[0].generation?.status, "pending");
+  });
+}
+
+test("a resumed promotion records the replacement content hash after an interrupted force", async t => {
+  const f = await setup(t, "markdown");
+  const config = await loadConfig("config.yml");
+  const target: ReleaseTarget = { path: resolve(f.path("en")), language: "en", format: "markdown" };
+  const initial = await ReleaseProgress.open(config, f.options, [target], "promote");
+  await initial.prepare("request");
+  await initial.savePromoted(target, "# Previous note", "source");
+  const forced = await ReleaseProgress.open(config, { ...f.options, force: true }, [target], "promote");
+  await forced.prepare("request");
+  // Stop before the write; the next invocation must complete this pending replacement.
+  const resumed = await ReleaseProgress.open(config, f.options, [target], "promote");
+  await resumed.prepare("request");
+  assert.equal(await resumed.readPromoted(target, "source"), undefined);
+  await resumed.savePromoted(target, "# Replacement note", "source");
+  const actual = await readFile(target.path, "utf8");
+  const entry = (await loadReleaseState(resumed.path)).releases[0].generation!;
+  assert.equal(entry.files[relative(dirname(resumed.path), target.path)].hash, contentHash(actual));
+  assert.equal(entry.pending.length, 0);
+  assert.equal(await resumed.readPromoted(target, "source"), actual);
+});
+
 for (const format of ["markdown", "html"]) {
-  test(`${format}: promotion saves a completed language before a missing source, then resumes and regenerates legacy targets`, async t => {
+  test(`${format}: promotion saves a completed language before a missing source, then resumes and force replaces legacy targets`, async t => {
     const f = await setup(t, format);
     mockModel(t, "mistral", () => modelResponse("mistral", english));
     await generate({ ...f.options, language: "en" });
@@ -131,13 +199,13 @@ for (const format of ["markdown", "html"]) {
     assert.equal(await readFile(target, "utf8"), reviewed);
     await access(fr.replace("QUA", "PRD"));
     await rm("notes/PRD/.release-notes-state.json");
-    await promote({ ...options, regenerate: true });
+    await promote({ ...options, force: true });
     assert.match(await readFile(target, "utf8"), /Added filters/);
     assert.doesNotMatch(await readFile(target, "utf8"), /Reviewed production note/);
   });
 }
 
-test('a failed explicit regeneration remains pending and a normal rerun replaces the old file', async t => {
+test('a failed forced replacement remains pending and a normal rerun replaces the old file', async t => {
   const f = await setup(t, "markdown");
   let fail = false;
   const requests = mockModel(t, "mistral", () => fail
@@ -145,7 +213,7 @@ test('a failed explicit regeneration remains pending and a normal rerun replaces
   await generate({ ...f.options, language: "en" });
   await writeFile(f.path("en"), "# Old reviewed content");
   fail = true;
-  await assert.rejects(generate({ ...f.options, regenerate: true, language: "en" }), GenerationError);
+  await assert.rejects(generate({ ...f.options, force: true, language: "en" }), GenerationError);
   assert.match(await readFile(f.path("en"), "utf8"), /Old reviewed content/);
   const pending = JSON.parse(await readFile("notes/QUA/.release-notes-state.json", "utf8"));
   assert.equal(pending.releases[0].generation.pending.length, 1);
@@ -155,11 +223,11 @@ test('a failed explicit regeneration remains pending and a normal rerun replaces
   assert.match(await readFile(f.path("en"), "utf8"), /Added filters/);
 });
 
-test('regeneration retains the original recorded date unless a replacement date is explicit', async t => {
+test('force retains the original recorded date unless a replacement date is explicit', async t => {
   const f = await setup(t, "markdown");
   mockModel(t, "mistral", () => modelResponse("mistral", english));
   const original = await generate({ ...f.options, language: "en", date: "2020-01-01" });
-  const regenerated = await generate({ ...f.options, language: "en", date: undefined, regenerate: true });
+  const regenerated = await generate({ ...f.options, language: "en", date: undefined, force: true });
   assert.equal(regenerated.metadata.date, original.metadata.date);
 });
 

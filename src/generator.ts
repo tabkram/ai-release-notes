@@ -7,7 +7,7 @@ import { loadConfig, resolveProviderAlias, resolveProviderConfig } from "./confi
 import { getChangelog, parseCommits } from "./git.js";
 import { resolveReleaseDate } from "./release-date.js";
 import { callLLM, resolveLLMConfig } from "./llm.js";
-import { resolveCacheConfig } from "./cache/index.js";
+import { modelCacheKey, removeModelCache, resolveCacheConfig } from "./cache/index.js";
 import { contentHash, generationTargets, ReleaseProgress } from "./release-progress.js";
 import {
   buildSystemPrompt,
@@ -214,10 +214,12 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     if (!primary) {
       const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt, cache);
       addModelUsage(usage, llmResult.usage);
-      if (progress && (!llmResult.text.trim() || llmResult.finishReason !== "stop")) {
+      const markdown = stripEnclosingCodeFence(llmResult.text);
+      if (!markdown || llmResult.finishReason !== "stop") {
+        if (cache) await removeModelCache(cache, modelCacheKey(providerName, providerConfig, systemPrompt, userPrompt));
         throw new Error("Primary generation did not complete; no final document was saved.");
       }
-      primary = { language: primaryLanguage, markdown: stripEnclosingCodeFence(llmResult.text) };
+      primary = { language: primaryLanguage, markdown };
       activeOutput.status = llmResult.usage.cacheHits ? "cached" : "generated";
     } else activeOutput.status = "reused";
     if (progress && (!onlyLanguage || onlyLanguage === primaryLanguage || !existingPrimary)) {
@@ -232,19 +234,24 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       activeOutput = output;
       const language = output.language;
       let release = await progress?.read(language, primaryMarkdown);
+      const sourceChanged = progress?.isTranslationStale(language);
       if (release) output.status = "reused";
       else {
+        const translationSystem = await buildTranslationSystemPrompt(language, translationInstructions);
         const translated = await callLLM(providerName, providerConfig,
-          await buildTranslationSystemPrompt(language, translationInstructions), primaryMarkdown, cache);
+          translationSystem, primaryMarkdown, cache);
         addModelUsage(usage, translated.usage);
-        output.status = translated.usage.cacheHits ? "cached" : "generated";
-        if (progress && (!translated.text.trim() || translated.finishReason !== "stop")) {
+        const markdown = stripEnclosingCodeFence(translated.text);
+        if (!markdown || translated.finishReason !== "stop") {
+          if (cache) await removeModelCache(cache, modelCacheKey(providerName, providerConfig, translationSystem, primaryMarkdown));
           throw new Error(`Translation ${language} did not complete; no final document was saved.`);
         }
-        release = { language, markdown: stripEnclosingCodeFence(translated.text) };
+        output.status = translated.usage.cacheHits ? "cached" : "generated";
+        release = { language, markdown };
       }
       if (progress) {
         release = await progress.save(release, primaryMarkdown);
+        if (sourceChanged) output.retranslatedFrom = primaryLanguage;
       }
       translatedReleases.push(release);
       await progress?.index(language, usage);

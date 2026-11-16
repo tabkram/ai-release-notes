@@ -173,7 +173,7 @@ export interface GenerateOptions extends ProviderOverrides, CacheOverrides {
   /** Persist each language as it completes, resuming release-specific output files. Used by the CLI. */
   persist?: boolean;
   /** Explicitly replace existing release documents instead of resuming them. */
-  regenerate?: boolean;
+  force?: boolean;
   /** Release date: "now" (default), "tag", or an ISO date such as "2026-07-20". */
   date?: string;
   /** Override LLM provider */
@@ -247,4 +247,6 @@ export interface GenerationUsage {
 export interface GenerationOutput {
   language: string;
   status: "generated" | "cached" | "reused" | "failed" | "not-attempted";
+  /** An existing translation was replaced because this primary language changed. */
+  retranslatedFrom?: string;
 }

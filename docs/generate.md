@@ -42,7 +42,7 @@ updated.
 | `--changelog-file <path>` | Raw changelog file (skip git) |
 | `--context <paths...>` | Context files or directories (mixed) |
 | `--dry-run` | Show prompts without calling LLM or writing output |
-| `--regenerate` | Replace existing release documents, including files created by older versions |
+| `--force` | Replace existing release documents, including files created by older versions |
 | `-v, --verbose` | Show applied instructions and generation steps |
 | `--stdout` | Write generated Markdown to standard output without saving files or indexes |
 | `--clipboard` | Copy result to clipboard |
@@ -85,25 +85,31 @@ started and no date override is supplied.
 
 If the primary note changes, the next run automatically retranslates all selected
 secondary languages whose recorded source fingerprint is stale, replacing their
-content. Otherwise their manual corrections are preserved. Without an old source
-fingerprint, existing translations are adopted as reviewed; use `--regenerate`
+content, including manual corrections. The console reports each automatic
+replacement and names the primary language that changed. Otherwise their manual
+corrections are preserved. Without an old source
+fingerprint, existing translations are adopted as reviewed; use `--force`
 if they need replacing. `--lang` limits the requested outputs; other languages
 are checked on their next run.
 
-`--regenerate` deliberately replaces the selected existing documents, whether or
-not they have recorded generation state. `--regenerate --lang fr` retains the saved primary note
-and replaces French from it. `--no-cache` independently bypasses API response
+`--force` deliberately replaces the selected existing documents, whether or
+not they have recorded generation state. When French is a secondary language,
+`--force --lang fr` retains the saved primary note and replaces French from it.
+`--no-cache` independently bypasses API response
 caching: it does not discard final documents. Use both flags for fresh model
 calls and replacement output:
 
 ```bash
-ai-release-notes generate --from v1 --to v2 --env QUA --regenerate --no-cache
+ai-release-notes generate --from v1 --to v2 --env QUA --force --no-cache
 ```
+
+`--force` replaces the former `--regenerate` option; the old name is no longer
+accepted. The corresponding API option is `force: true`.
 
 Adding a secondary language completes only that missing language.
 
 A changed release date or generation request is reported instead of silently
-mixing documents from different inputs; use `--regenerate` to replace them.
+mixing documents from different inputs; use `--force` to replace them.
 Retry settings and cache controls do not change the request fingerprint. A
 resumed `--date now` run retains the ledger's original date across days.
 

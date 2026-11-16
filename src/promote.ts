@@ -295,7 +295,7 @@ export interface PromoteOptions extends ProviderOverrides, CacheOverrides {
   /** Persist completed files and resume existing target documents. Used by the CLI. */
   persist?: boolean;
   /** Explicitly replace existing target documents. */
-  regenerate?: boolean;
+  force?: boolean;
   /** Write the opening with this instead of the configured provider. */
   callModel?: OpeningModelCall;
 }

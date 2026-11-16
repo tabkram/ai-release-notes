@@ -24,6 +24,10 @@ Only non-empty, normally completed responses are saved. Expired, corrupt or
 incomplete entries are misses. Writes are atomic; a storage failure warns
 without discarding the answer.
 
+Generation rejects truncated or empty notes, including empty Markdown fences,
+before returning or saving them. A cached response that becomes empty when
+unwrapped is evicted so the next run can recover rather than repeat the failure.
+
 Concurrent identical requests share preparation, retries and persistence through
 `execution-engine` 5's `executeMemoize` with `ttl: 0`. Completed or failed calls
 are removed immediately. Sharing requires matching credentials, cache directory,
@@ -31,8 +35,11 @@ TTL, retry and provider-cache settings; it does not span CLI processes.
 `--no-cache` / `cache: false` bypasses local reads, writes and request sharing.
 
 ```bash
-# Force a model call without replacing saved responses.
+# Bypass response caching; completed final documents are still reused.
 ai-release-notes generate --from v1 --to v2 --env PROD --no-cache
+
+# Replace selected final documents with fresh model responses.
+ai-release-notes generate --from v1 --to v2 --env PROD --force --no-cache
 
 # Override the lifetime for this run.
 ai-release-notes generate --from v1 --to v2 --env PROD --cache-ttl 30d

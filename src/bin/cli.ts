@@ -175,6 +175,11 @@ function printGenerationSummary(stdout: boolean, result: Pick<GenerateResult, "m
   printCacheUsage(stdout, usage);
   for (const output of result.metadata.outputs ?? []) {
     printStatus(stdout, chalk.gray(`   ${output.language}: ${output.status}`));
+    if (output.retranslatedFrom) {
+      printStatus(stdout, chalk.yellow(
+        `   ⚠ ${output.language}: automatically retranslated because primary language ${output.retranslatedFrom} changed; the previous translation, including any manual corrections, was replaced.`
+      ));
+    }
   }
   if (result.metadata.contextFiles && result.metadata.contextFiles.length > 0) {
     printStatus(stdout, chalk.gray(`📎 Context files: ${result.metadata.contextFiles.join(", ")}`));
@@ -263,7 +268,7 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
-  .option("--regenerate", "Replace existing release documents instead of completing missing outputs")
+  .option("--force", "Replace existing release documents instead of completing missing outputs")
   .option("--no-cache", "Bypass local model cache reads and writes")
   .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
   .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
@@ -316,7 +321,7 @@ program
         changelogFile: opts.changelogFile,
         dryRun: opts.dryRun,
         persist: !opts.stdout && !opts.dryRun,
-        regenerate: opts.regenerate,
+        force: opts.force,
         clipboard: opts.clipboard,
         outputPath: opts.output,
         toDir: opts.toDir,
@@ -488,7 +493,7 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
-  .option("--regenerate", "Replace existing release documents instead of completing missing outputs")
+  .option("--force", "Replace existing release documents instead of completing missing outputs")
   .option("--no-cache", "Bypass local model cache reads and writes")
   .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
   .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
@@ -527,7 +532,7 @@ program
         date: opts.date,
         configPath: opts.config,
         persist: !opts.stdout && !opts.dryRun,
-        regenerate: opts.regenerate,
+        force: opts.force,
       });
 
       const { fromVersion, toVersion } = result.metadata;
