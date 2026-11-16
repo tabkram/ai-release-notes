@@ -1,3 +1,19 @@
+## [0.6.0](https://github.com/tabkram/ai-release-notes/compare/v0.5.3...v0.6.0) (2026-11-16)
+
+### ⚠ BREAKING CHANGES
+
+* **cache:** require Node.js 24 or later.
+
+### Features
+
+* allow configurable retries for LLM API requests ([65c5583](https://github.com/tabkram/ai-release-notes/commit/65c5583bf2b5b11d0fb6e1579771b543d2ffd3fa))
+* **cache:** add local and provider prompt caching ([7aa4cc0](https://github.com/tabkram/ai-release-notes/commit/7aa4cc0632a44eee4e491d88154abcb309981640))
+
+### Bug Fixes
+
+* avoid retranslating the full index page when adding a release ([c3dd9e9](https://github.com/tabkram/ai-release-notes/commit/c3dd9e965ce8129cd115861df5d144b99e7dec2d))
+* unwrap HTML entry fences and cap retry delays ([838acd8](https://github.com/tabkram/ai-release-notes/commit/838acd83ef4248372d1f866babcd8efb853adb89))
+
 ## [0.5.3](https://github.com/tabkram/ai-release-notes/compare/v0.5.2...v0.5.3) (2026-09-24)
 
 ## [0.5.1](https://github.com/tabkram/ai-release-notes/compare/v0.5.0...v0.5.1) (2026-07-29)
