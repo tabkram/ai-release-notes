@@ -55,3 +55,13 @@ usually needs no secret at all:
 npm install -g dotenv-cli
 dotenv -e .env -- npx ai-release-notes generate --from v1.0.0 --to v1.1.0 --env PROD
 ```
+
+## Retaining partial documents
+
+Automatic resumption reads the configured final note files and their shared
+`.release-notes-state.json` ledger. A hosted runner's filesystem is temporary, so retain
+those documents, the ledger and the corresponding indexes as CI artifacts after success or
+failure, then restore them before rerunning the exact same environment and range.
+Do not overlay artifacts from another range or deployment on a newer release's
+history. Final documents do not expire; artifact retention is controlled by CI.
+The API response cache remains an independent, optional optimization.

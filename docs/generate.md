@@ -41,10 +41,75 @@ updated.
 | `--template <path>` | Custom template file |
 | `--changelog-file <path>` | Raw changelog file (skip git) |
 | `--context <paths...>` | Context files or directories (mixed) |
-| `--dry-run` | Show prompts without calling LLM |
+| `--dry-run` | Show prompts without calling LLM or writing output |
+| `--regenerate` | Replace existing release documents, including files created by older versions |
 | `-v, --verbose` | Show applied instructions and generation steps |
 | `--stdout` | Write generated Markdown to standard output without saving files or indexes |
 | `--clipboard` | Copy result to clipboard |
+
+## Automatic resumption
+
+For outputs that name one file per release and language, `generate` saves each
+completed language immediately, then updates its index. If a later translation
+or index fails, the completed files are already at their configured final paths.
+Run the same command again to complete missing outputs. No resume flag is needed.
+
+Existing documents are preserved, including notes written by an older version
+with no generation metadata. Missing translations are made from the saved primary
+note (the first configured language), including manual corrections. For HTML,
+only the release body is extracted and converted locally to Markdown; the page,
+styles and footer are not sent as translation content.
+
+A single `.release-notes-state.json` ledger in the common output directory
+holds one entry per environment and version range. The directory is derived from
+the output patterns before language/version placeholders, so adding a language
+or changing the selected range does not create another ledger. Set `stateFile`
+in the configuration to choose an explicit path (for example,
+`./releases/{env}/.release-notes-state.json`).
+
+Each entry can contain a recorded `deployment` date and `notesSkipped` fact,
+alongside `generation` metadata: original generation date, request fingerprint,
+completed files, source fingerprints, pending replacements and index progress.
+Generation status is `pending` until all configured outputs and indexes are
+verified, then `complete`. Completing generation preserves the deployment record.
+There is no TTL and no duplicate note content, prompts or API credentials.
+Missing files are repaired even when an old entry says they finished. A failed
+explicit regeneration stays pending while its old final document remains usable.
+
+Former `.pending-release-notes.json` records are imported with their original
+ranges and deployment dates. A former per-note `.generation.json` is imported
+when that range is resumed, remapping file paths into the shared ledger. Old
+files are removed only after their state has been saved successfully. For a
+recorded skipped deployment, its date is the default when generation has not
+started and no date override is supplied.
+
+If the primary note changes, the next run automatically retranslates all selected
+secondary languages whose recorded source fingerprint is stale, replacing their
+content. Otherwise their manual corrections are preserved. Without an old source
+fingerprint, existing translations are adopted as reviewed; use `--regenerate`
+if they need replacing. `--lang` limits the requested outputs; other languages
+are checked on their next run.
+
+`--regenerate` deliberately replaces the selected existing documents, whether or
+not they have recorded generation state. `--regenerate --lang fr` retains the saved primary note
+and replaces French from it. `--no-cache` independently bypasses API response
+caching: it does not discard final documents. Use both flags for fresh model
+calls and replacement output:
+
+```bash
+ai-release-notes generate --from v1 --to v2 --env QUA --regenerate --no-cache
+```
+
+Adding a secondary language completes only that missing language.
+
+A changed release date or generation request is reported instead of silently
+mixing documents from different inputs; use `--regenerate` to replace them.
+Retry settings and cache controls do not change the request fingerprint. A
+resumed `--date now` run retains the ledger's original date across days.
+
+Progressive persistence applies to separate release/language files. Cumulative
+changelogs and combined multi-language files retain their existing append/save
+behavior. `--stdout` and `--dry-run` never write files, indexes or progress state.
 
 ## Terminal only
 

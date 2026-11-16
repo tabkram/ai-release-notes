@@ -174,3 +174,6 @@ export type {
 export type { OutputIndexRelease, UpdateOutputIndexesParams } from "./output-index.js";
 
 export type { ReleaseNoteParams } from "./release.js";
+
+export { loadReleaseState, saveReleaseState, mergeReleaseStates, recordSkippedRelease, releaseStateId } from "./release-state.js";
+export type { ReleaseState, ReleaseStateEntry, GenerationState } from "./release-state.js";

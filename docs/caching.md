@@ -97,17 +97,20 @@ Clearing local entries does not delete remote resources or stop storage charges.
 
 Successful responses are saved before the next call. If German fails after
 English and French, the error reports completed, failed and unattempted languages.
-A rerun reuses completed responses. Output files are assembled only after
-generation completes.
+A rerun reuses completed responses. The CLI also saves each completed language
+at its final destination before starting the next language. Separate release
+files resume automatically from those documents, independently of cache expiry
+or `--no-cache`; see [automatic resumption](generate.md#automatic-resumption).
 
-Inputs must match, including the release date: use `--date tag` or a fixed date
+For response-cache reuse, inputs must match, including the release date: use `--date tag` or a fixed date
 to resume across days. An index failure also preserves note responses for the
 rerun. Markdown and HTML follow the same rules; HTML rendering is local.
 
 `cacheHits` counts local reuse; `coalescedCalls` counts shared pending calls.
 Neither adds model calls or tokens. Only the initiating caller reports usage.
 `providerCacheReadTokens` / `providerCacheWriteTokens` report API token counts
-when available, not monetary cost or storage charges.
+when available, not monetary cost or storage charges. `reused` output status means
+the final document was read from disk; it is not an API response-cache hit.
 
 ## Programmatic API
 

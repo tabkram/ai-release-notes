@@ -103,6 +103,7 @@ outputs are reported as skipped.
 | `--lang <language>` | Promote one language only |
 | `--date <date>` | Release date: `now` (default), `tag`, or an ISO date |
 | `--config <path>` | Path to config file |
+| `--regenerate` | Replace selected target notes, including legacy files without generation state |
 | `--dry-run` | Show what would be promoted without writing anything |
 | `-v, --verbose` | Show what was promoted, release by release |
 | `--stdout` | Write the promoted notes to the terminal without saving files |
@@ -116,3 +117,19 @@ read is copied as it stands, which is the whole point of promoting.
 
 - [Generating release notes](generate.md) · [Asking for a change](prompt.md)
 - [Programmatic API](api.md#promote) — `promote()` returns the files without writing them
+
+## Automatic resumption
+
+The CLI uses the same final-file rule as `generate`: save each completed target
+immediately, retain existing target notes, and complete missing notes or indexes
+on the next run. The shared `.release-notes-state.json` ledger keeps each range's original
+date and source fingerprints alongside recorded skipped deployments. A partial promotion does not advance the inferred
+range past the languages still missing. Configured languages are required when
+the source path has a language placeholder.
+
+`--regenerate` explicitly rebuilds selected targets from the reviewed source
+chain, including targets from older versions without generation state. `--no-cache`
+changes only model-response reuse; combine it with `--regenerate` if an opening
+must be written with a fresh model call. Changed promotion sources are reported
+before replacing an existing reviewed target. `--stdout` and `--dry-run` do not
+write output or state files.

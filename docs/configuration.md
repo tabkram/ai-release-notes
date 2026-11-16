@@ -170,3 +170,16 @@ written:
 
 A page title is a sentence, so it is written in the template's `<title>` rather
 than assembled from the versions: there is no `{{title}}` slot.
+
+## Shared release ledger
+
+```yaml
+stateFile: ./releases/{env}/.release-notes-state.json
+```
+
+The CLI uses one ledger for deployment records and generation progress, with a
+separate entry for each environment/range. Without `stateFile`, its directory is
+derived from the common output patterns, before language/version placeholders.
+See [automatic resumption](generate.md#automatic-resumption) for the entry fields,
+legacy-file migration and the distinction between a recorded deployment and an
+unfinished generation. No extra pending file or per-note sidecar is created.

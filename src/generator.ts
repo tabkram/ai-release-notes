@@ -8,6 +8,7 @@ import { getChangelog, parseCommits } from "./git.js";
 import { resolveReleaseDate } from "./release-date.js";
 import { callLLM, resolveLLMConfig } from "./llm.js";
 import { resolveCacheConfig } from "./cache/index.js";
+import { contentHash, generationTargets, ReleaseProgress } from "./release-progress.js";
 import {
   buildSystemPrompt,
   buildTranslationSystemPrompt,
@@ -135,7 +136,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const primaryLanguage = languages[0];
   const onlyLanguage = resolveRequestedLanguage(languages, options.language);
   const systemPrompt = await buildSystemPrompt(config.prompt);
-  const date = await resolveReleaseDate(options, options.toVersion);
+  const targets = options.persist && !options.dryRun ? await generationTargets(config, options) : [];
+  const progress = targets.length > 0 ? await ReleaseProgress.open(config, options, targets) : undefined;
+  const date = progress?.date ?? await resolveReleaseDate(options, options.toVersion);
 
   const userPrompt = buildUserPrompt({
     projectName: config.projectName,
@@ -195,33 +198,56 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     contextFiles: contextFiles.map((cf) => cf.path),
     usage,
     outputs,
+    progressFile: progress?.path,
   };
+  await progress?.prepare(contentHash(JSON.stringify({ providerName, providerConfig: {
+    model: providerConfig.model, baseURL: providerConfig.baseURL, temperature: providerConfig.temperature,
+    maxTokens: providerConfig.maxTokens,
+  }, systemPrompt, userPrompt, primaryLanguage, output: config.output, outputIndex: config.outputIndex })));
   let primaryMarkdown = "";
+  let primaryHtml: string | undefined;
   let activeOutput = outputs[0];
   const translatedReleases: GenerateResult["localized"] = [];
   try {
-    const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt, cache);
-    addModelUsage(usage, llmResult.usage);
-    primaryMarkdown = stripEnclosingCodeFence(llmResult.text);
-    activeOutput.status = llmResult.usage.cacheHits ? "cached" : "generated";
-
+    const existingPrimary = await progress?.read(primaryLanguage, undefined, !!onlyLanguage && onlyLanguage !== primaryLanguage);
+    let primary = existingPrimary;
+    if (!primary) {
+      const llmResult = await callLLM(providerName, providerConfig, systemPrompt, userPrompt, cache);
+      addModelUsage(usage, llmResult.usage);
+      if (progress && (!llmResult.text.trim() || llmResult.finishReason !== "stop")) {
+        throw new Error("Primary generation did not complete; no final document was saved.");
+      }
+      primary = { language: primaryLanguage, markdown: stripEnclosingCodeFence(llmResult.text) };
+      activeOutput.status = llmResult.usage.cacheHits ? "cached" : "generated";
+    } else activeOutput.status = "reused";
+    if (progress && (!onlyLanguage || onlyLanguage === primaryLanguage || !existingPrimary)) {
+      primary = await progress.save(primary);
+      primaryMarkdown = primary.markdown;
+      await progress.index(primaryLanguage, usage);
+    }
+    primaryMarkdown = primary.markdown;
+    primaryHtml = primary.html;
     const translationInstructions = await resolveInstructions(config.prompt?.instructions);
     for (const output of outputs.slice(1)) {
       activeOutput = output;
       const language = output.language;
-      const translatedRelease = await callLLM(
-        providerName,
-        providerConfig,
-        await buildTranslationSystemPrompt(language, translationInstructions),
-        primaryMarkdown,
-        cache
-      );
-      addModelUsage(usage, translatedRelease.usage);
-      activeOutput.status = translatedRelease.usage.cacheHits ? "cached" : "generated";
-      translatedReleases.push({
-        language,
-        markdown: stripEnclosingCodeFence(translatedRelease.text),
-      });
+      let release = await progress?.read(language, primaryMarkdown);
+      if (release) output.status = "reused";
+      else {
+        const translated = await callLLM(providerName, providerConfig,
+          await buildTranslationSystemPrompt(language, translationInstructions), primaryMarkdown, cache);
+        addModelUsage(usage, translated.usage);
+        output.status = translated.usage.cacheHits ? "cached" : "generated";
+        if (progress && (!translated.text.trim() || translated.finishReason !== "stop")) {
+          throw new Error(`Translation ${language} did not complete; no final document was saved.`);
+        }
+        release = { language, markdown: stripEnclosingCodeFence(translated.text) };
+      }
+      if (progress) {
+        release = await progress.save(release, primaryMarkdown);
+      }
+      translatedReleases.push(release);
+      await progress?.index(language, usage);
     }
   } catch (error) {
     if (activeOutput.status === "not-attempted") activeOutput.status = "failed";
@@ -236,10 +262,13 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     );
   }
 
+  await progress?.finish(primaryMarkdown);
+
   // ── Format output ──
   const localized = [{
     language: primaryLanguage,
     markdown: primaryMarkdown,
+    html: primaryHtml,
   }, ...translatedReleases].filter((release) => !onlyLanguage || release.language === onlyLanguage);
   const markdown = localized
     .map((release, index) => index === 0
@@ -260,6 +289,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       contextFiles: contextFiles.map((cf) => cf.path),
       usage,
       outputs,
+      progressFile: progress?.path,
     },
   };
 
@@ -279,9 +309,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
       date,
       projectName: config.projectName,
     });
-    result.html = renderHtmlRelease(markdown);
+    result.html = result.localized.length === 1 && result.localized[0].html ? result.localized[0].html : renderHtmlRelease(markdown);
     for (const release of result.localized) {
-      release.html = renderHtmlRelease(release.markdown);
+      release.html ??= renderHtmlRelease(release.markdown);
     }
   }
 

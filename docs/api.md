@@ -193,3 +193,35 @@ Configuration (`loadConfig`), git (`getChangelog`, `getLatestTag`), prompt
 building (`buildSystemPrompt`, `buildUserPrompt`), the provider call (`callLLM`)
 and the TypeScript types of all of the above are exported too — see
 [`src/index.ts`](../src/index.ts) for the full list.
+
+## Progressive file persistence
+
+`generate()` and `promote()` remain return-only by default. The CLI passes
+`persist: true` to save each completed release/language at its final path and
+resume from existing documents and the shared `.release-notes-state.json` ledger.
+Callers can opt into the same behavior:
+
+```typescript
+await generate({
+  fromVersion: "v1", toVersion: "v2", environment: "QUA", persist: true,
+});
+```
+
+`regenerate: true` replaces selected existing documents, including legacy files.
+It is independent of `cache: false`, which bypasses API response caching.
+`metadata.progressFile` names the shared ledger; output status `reused` identifies a
+final document read from disk. A failed index leaves completed note files
+available and its index unfinished for the next invocation. See
+[automatic resumption](generate.md#automatic-resumption) for source changes,
+original dates, and supported output layouts.
+
+### Shared release state
+
+`loadReleaseState(path, environment?)`, `saveReleaseState(path, state, environment?)`
+and `mergeReleaseStates(base, incoming)` let callers share the same ledger with
+deployment tooling. `recordSkippedRelease({ path, environment, fromVersion,
+toVersion, date, revision? })` records an actual skipped deployment. Original
+deployment dates are retained while generation metadata is updated, and unrelated
+ranges survive writes. Supplying the environment imports the former pending
+ledger beside that path; saving removes it after the merged write succeeds.
+`revision` can record a CI attempt's source commit without implying deployment.

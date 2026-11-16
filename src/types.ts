@@ -144,6 +144,7 @@ export const ReleaseNotesConfigSchema = z.object({
   git: GitConfigSchema.optional(),
   output: OutputsConfigSchema.optional(),
   outputIndex: OutputIndexesConfigSchema.optional(),
+  stateFile: z.string().min(1).optional(),
   cache: CacheConfigSchema.optional(),
 });
 
@@ -169,6 +170,10 @@ export interface GenerateOptions extends ProviderOverrides, CacheOverrides {
   toVersion: string;
   /** Environment name: PROD, QUA, DEV, etc. */
   environment: string;
+  /** Persist each language as it completes, resuming release-specific output files. Used by the CLI. */
+  persist?: boolean;
+  /** Explicitly replace existing release documents instead of resuming them. */
+  regenerate?: boolean;
   /** Release date: "now" (default), "tag", or an ISO date such as "2026-07-20". */
   date?: string;
   /** Override LLM provider */
@@ -223,6 +228,7 @@ export interface GenerateResult {
     contextFiles?: string[];
     usage: GenerationUsage;
     outputs?: GenerationOutput[];
+    progressFile?: string;
   };
 }
 
@@ -240,5 +246,5 @@ export interface GenerationUsage {
 
 export interface GenerationOutput {
   language: string;
-  status: "generated" | "cached" | "failed" | "not-attempted";
+  status: "generated" | "cached" | "reused" | "failed" | "not-attempted";
 }

@@ -15,6 +15,7 @@
  * so that, and only that, is what a model is asked for.
  */
 
+import { ReleaseProgress, contentHash, type ReleaseTarget } from "./release-progress.js";
 import { addModelUsage } from "./model-usage.js";
 import { readFile } from "fs/promises";
 import { basename, join, resolve } from "path";
@@ -291,6 +292,10 @@ export interface PromoteOptions extends ProviderOverrides, CacheOverrides {
   language?: string;
   /** LLM provider override for the one call that writes the opening. */
   provider?: string;
+  /** Persist completed files and resume existing target documents. Used by the CLI. */
+  persist?: boolean;
+  /** Explicitly replace existing target documents. */
+  regenerate?: boolean;
   /** Write the opening with this instead of the configured provider. */
   callModel?: OpeningModelCall;
 }
@@ -333,6 +338,7 @@ export interface PromoteResult {
      * covers it could not be written. Absent when nothing was in the way.
      */
     openingSkipped?: string;
+    progressFile?: string;
   };
 }
 
@@ -417,14 +423,34 @@ export async function promote(options: PromoteOptions): Promise<PromoteResult> {
     );
   }
 
-  const plan = planPromotion({
+  let plan = planPromotion({
     available,
     fromVersion: options.fromVersion,
     toVersion: options.toVersion,
     promotedVersion: latestPromotedVersion(promoted.flat()),
   });
 
-  const date = await resolveReleaseDate(options, plan.toVersion);
+  if (options.persist && plan.segments.length === 0) {
+    const previous = promoted.flat().find(release => release.toVersion === plan.toVersion && release.fromVersion);
+    if (previous?.fromVersion) plan = planPromotion({ available, fromVersion: previous.fromVersion, toVersion: plan.toVersion });
+  }
+  const targetLanguages = (target: PromotionTarget, releases: DiscoveredRelease[]) => {
+    const found = languagesOf(releases, options.language);
+    return !options.language && target.source.includes("{lang}") && config.prompt?.languages
+      ? [...new Set([...found, ...config.prompt.languages])] : found;
+  };
+  const progressTargets: ReleaseTarget[] = promotable.flatMap((target, index) =>
+    targetLanguages(target, sources[index]).map(language => ({
+      path: resolve(formatOutputPath(target.destination, { language, fromVersion: plan.fromVersion, toVersion: plan.toVersion })),
+      language: language ?? config.prompt?.languages?.[0] ?? "en", format: target.format, template: target.template, pattern: target.destination,
+    })));
+  const progress = options.persist && progressTargets.length > 0 && plan.segments.length > 0
+    ? await ReleaseProgress.open(config, { ...options, environment: options.toEnvironment,
+      fromVersion: plan.fromVersion, toVersion: plan.toVersion }, progressTargets, "promote") : undefined;
+  const date = progress?.date ?? await resolveReleaseDate(options, plan.toVersion);
+  await progress?.prepare(contentHash(JSON.stringify({ fromEnvironment: options.fromEnvironment,
+    provider: options.provider ?? config.provider, output: config.output, outputIndex: config.outputIndex })));
+
   const files: PromotedFile[] = [];
   const usage = emptyUsage();
 
@@ -436,7 +462,7 @@ export async function promote(options: PromoteOptions): Promise<PromoteResult> {
 
   if (plan.segments.length > 0) {
     for (const [index, target] of promotable.entries()) {
-      for (const language of languagesOf(sources[index], options.language)) {
+      for (const language of targetLanguages(target, sources[index])) {
         files.push(await promoteRelease({
           plan,
           language,
@@ -448,11 +474,13 @@ export async function promote(options: PromoteOptions): Promise<PromoteResult> {
           writeOpening: opening.write,
           usage,
           outcome: opening,
+          progress,
         }));
       }
     }
   }
 
+  await progress?.finish();
   return {
     files,
     plan,
@@ -466,6 +494,7 @@ export async function promote(options: PromoteOptions): Promise<PromoteResult> {
       skipped,
       usage,
       openingSkipped: opening.skipped,
+      progressFile: progress?.path,
     },
   };
 }
@@ -507,6 +536,7 @@ function resolveOpeningWriter(
 }
 
 interface PromoteReleaseParams {
+  progress?: ReleaseProgress;
   plan: PromotionPlan;
   language?: string;
   date: string;
@@ -547,10 +577,24 @@ async function promoteRelease(params: PromoteReleaseParams): Promise<PromotedFil
     toVersion: plan.toVersion,
   }));
 
+  const progressTarget = { path, language: language ?? "en", format: target.format, template: target.template };
+  const sourceHash = contentHash(JSON.stringify(documents));
+  const existing = await params.progress?.readPromoted(progressTarget, sourceHash);
+  if (existing !== undefined) {
+    await params.progress!.savePromoted(progressTarget, existing, sourceHash);
+    await params.progress!.index(progressTarget.language, params.usage);
+    return { path, content: existing, format: target.format, language,
+      sources: sources.map(release => release.path), ownedByRelease: true };
+  }
+
   const note = target.format === "html"
     ? await promoteHtml(documents, params)
     : await mergeNotes(documents, "markdown", params);
 
+  if (params.progress) {
+    await params.progress.savePromoted(progressTarget, note.content, sourceHash);
+    await params.progress.index(progressTarget.language, params.usage);
+  }
   return {
     path,
     content: note.content,

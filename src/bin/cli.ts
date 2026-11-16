@@ -263,6 +263,7 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
+  .option("--regenerate", "Replace existing release documents instead of completing missing outputs")
   .option("--no-cache", "Bypass local model cache reads and writes")
   .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
   .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
@@ -314,6 +315,8 @@ program
         configPath: opts.config,
         changelogFile: opts.changelogFile,
         dryRun: opts.dryRun,
+        persist: !opts.stdout && !opts.dryRun,
+        regenerate: opts.regenerate,
         clipboard: opts.clipboard,
         outputPath: opts.output,
         toDir: opts.toDir,
@@ -331,6 +334,19 @@ program
 
       if (opts.stdout) {
         console.log(generatedResult.markdown);
+      }
+
+      if (opts.dryRun) {
+        if (!opts.stdout) console.log(generatedResult.markdown);
+        printGenerationSummary(opts.stdout, generatedResult);
+        return;
+      }
+      if (generatedResult.metadata.progressFile) {
+        printStatus(opts.stdout, chalk.green(`💾 Release documents saved; progress: ${generatedResult.metadata.progressFile}`));
+        if (opts.clipboard) await clipboardy.write(generatedResult.markdown);
+        printGenerationSummary(opts.stdout, generatedResult);
+        summaryPrinted = true;
+        return;
       }
 
       // Determine output path
@@ -472,6 +488,7 @@ program
   .option("--max-tokens <number>", "Maximum output tokens override", maxTokensOption)
   .option("--max-retries <number>", "Maximum retries per model call (default: 2)", nonNegativeIntegerOption)
   .option("--initial-retry-delay-ms <number>", "Initial exponential retry delay in milliseconds (default: 2000)", nonNegativeIntegerOption)
+  .option("--regenerate", "Replace existing release documents instead of completing missing outputs")
   .option("--no-cache", "Bypass local model cache reads and writes")
   .option("--cache-ttl <duration>", "Local response lifetime, for example 1h or 7d (default: 7d)", cacheTtlOption)
   .option("--no-provider-cache", "Disable explicit provider cache options (automatic caches may remain active)")
@@ -509,6 +526,8 @@ program
         language: opts.lang,
         date: opts.date,
         configPath: opts.config,
+        persist: !opts.stdout && !opts.dryRun,
+        regenerate: opts.regenerate,
       });
 
       const { fromVersion, toVersion } = result.metadata;
@@ -562,28 +581,29 @@ program
         return;
       }
 
-      for (const file of result.files) {
-        await mkdir(dirname(file.path), { recursive: true });
-        const saved = await saveReleaseNotes(file.path, file.content, file.content, file.ownedByRelease);
-        console.log(chalk.green(`${saved === "replaced" ? "💾 Replaced" : "💾 Saved to"} ${file.path}`));
+      if (!result.metadata.progressFile) {
+        for (const file of result.files) {
+          await mkdir(dirname(file.path), { recursive: true });
+          const saved = await saveReleaseNotes(file.path, file.content, file.content, file.ownedByRelease);
+          console.log(chalk.green(`${saved === "replaced" ? "💾 Replaced" : "💾 Saved to"} ${file.path}`));
+        }
+
+        const languages = [...new Set(result.files.flatMap((file) => file.language ? [file.language] : []))];
+        await updateOutputIndexes({
+          outputIndexes: outputIndexConfigs(result.config),
+          releases: result.files,
+          projectName: result.config.projectName,
+          environment: toEnvironment,
+          fromVersion,
+          toVersion,
+          date: result.metadata.date,
+          languages: languages.length > 0 ? languages : (result.config.prompt?.languages ?? ["en"]),
+          primaryLanguage: result.config.prompt?.languages?.[0] ?? languages[0] ?? "en",
+          // Promoting calls no model, so an index in a language its template is
+          // not written in keeps the template's own wording.
+          onUpdated: printOutputIndexUpdate,
+        });
       }
-
-      const languages = [...new Set(result.files.flatMap((file) => file.language ? [file.language] : []))];
-      await updateOutputIndexes({
-        outputIndexes: outputIndexConfigs(result.config),
-        releases: result.files,
-        projectName: result.config.projectName,
-        environment: toEnvironment,
-        fromVersion,
-        toVersion,
-        date: result.metadata.date,
-        languages: languages.length > 0 ? languages : (result.config.prompt?.languages ?? ["en"]),
-        primaryLanguage: result.config.prompt?.languages?.[0] ?? languages[0] ?? "en",
-        // Promoting calls no model, so an index in a language its template is
-        // not written in keeps the template's own wording.
-        onUpdated: printOutputIndexUpdate,
-      });
-
       const { usage } = result.metadata;
       console.log(chalk.gray(
         `\n📊 ${result.plan.segments.length} release${result.plan.segments.length === 1 ? "" : "s"} promoted | ` +
