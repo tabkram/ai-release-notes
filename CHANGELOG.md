@@ -1,3 +1,19 @@
+## [0.6.1](https://github.com/tabkram/ai-release-notes/compare/v0.6.0...v0.6.1) (2026-11-16)
+
+### ⚠ BREAKING CHANGES
+
+* **releases:** --regenerate and regenerate: true are removed without aliases;
+  use --force and force: true on generate and promote.
+
+### Features
+
+* **eval:** add comprehensive release note quality evaluation ([6dc27ea](https://github.com/tabkram/ai-release-notes/commit/6dc27ea4db50474431c6fa0a290155d0d7f302af))
+* **releases:** use force and harden release resumption ([84644d9](https://github.com/tabkram/ai-release-notes/commit/84644d9e7d9554d7c33ceac66d2fcb2e167abb2f)), references [#9](https://github.com/tabkram/ai-release-notes/issues/9) [#14](https://github.com/tabkram/ai-release-notes/issues/14)
+
+### Bug Fixes
+
+* resume release notes from final documents with one shared state ([70b0b46](https://github.com/tabkram/ai-release-notes/commit/70b0b463d126334599dbfb621c930ebdbc79352c)), references [#9](https://github.com/tabkram/ai-release-notes/issues/9)
+
 ## [0.6.0](https://github.com/tabkram/ai-release-notes/compare/v0.5.3...v0.6.0) (2026-11-16)
 
 ### ⚠ BREAKING CHANGES
