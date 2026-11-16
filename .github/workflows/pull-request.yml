@@ -19,6 +19,8 @@ jobs:
       github.event.action != 'closed' &&
       (github.event.action != 'labeled' || github.event.label.name == 'deploy')
     uses: ./.github/workflows/_build.yml
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
 
   compute-version:
     name: Compute canary version

@@ -16,8 +16,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/bin/cli.ts",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && tsc -p test/eval/tsconfig.json",
     "test": "tsx --test test/*.test.ts",
+    "eval": "node --import tsx test/eval/run.ts",
     "prepare": "husky",
     "prepublishOnly": "npm run build",
     "test:cleanup": "node --test .github/scripts/canary-cleanup.spec.cjs .github/scripts/manual-unpublish.spec.cjs"

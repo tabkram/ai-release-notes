@@ -5,3 +5,5 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/_build.yml
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}

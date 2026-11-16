@@ -1,0 +1,198 @@
+{
+  "projectName": "Express",
+  "fromVersion": "4.18.2",
+  "toVersion": "4.18.3",
+  "date": "2024-02-26",
+  "environment": "prod",
+  "source": {
+    "repository": "https://github.com/expressjs/express",
+    "fromSha": "8368dc178af16b91b576c4c1d135f701a0007e5d",
+    "toSha": "1b51edac7c5f2844e23602164a52643bb625993a"
+  },
+  "commits": [
+    {
+      "sha": "06b2b1416d07698b8a6eed467f90d0b3ceb380c8",
+      "subject": "docs: update git clone to https protocol"
+    },
+    {
+      "sha": "29e117e676901a804031896f95f0eba317b05099",
+      "subject": "build: Node.js@16.18"
+    },
+    {
+      "sha": "723b67766fb864424a59ebe46b6516bb484f6a23",
+      "subject": "build: Node.js@18.12"
+    },
+    {
+      "sha": "442fd467992992558806da8da07e945838712587",
+      "subject": "build: actions/checkout@v3"
+    },
+    {
+      "sha": "c6ee8d6e7f11c3ac6bdda8e1bd4c1e38445f2d22",
+      "subject": "lint: remove unused function arguments in tests"
+    },
+    {
+      "sha": "a1efd9d6cf968a9e863f3fdd3fef63d06ff039c4",
+      "subject": "lint: remove unused parameter from internal function"
+    },
+    {
+      "sha": "6b4c4f5426fb5de23fb7174fd6e3bf53048e06ca",
+      "subject": "docs: fix typos in JSDoc comments"
+    },
+    {
+      "sha": "3c1d605da76a6c25dbe423a42d58871803c3e328",
+      "subject": "lint: remove unused parameters in examples"
+    },
+    {
+      "sha": "f05b5d0e9c43625e5677b427c33b2f950eb5bea8",
+      "subject": "build: Node.js@16.19"
+    },
+    {
+      "sha": "546969d1989d00fda460ccb23fabb943650dac51",
+      "subject": "build: Node.js@18.14"
+    },
+    {
+      "sha": "b9f7a97fe164d2a64279105abe375c69eaab9ebb",
+      "subject": "build: use $GITHUB_OUTPUT for environment list"
+    },
+    {
+      "sha": "506fbd63befe810783dba49d11159c7ad46c239a",
+      "subject": "docs: add missing JSDoc param for parseExtendedQueryString"
+    },
+    {
+      "sha": "1e42a98db6708e5a3609d0f7c09bcc176b481ea7",
+      "subject": "deps: body-parser@1.20.2"
+    },
+    {
+      "sha": "60b7c672c19ba6b96cc7e5383eee00f8bf99a45a",
+      "subject": "build: mocha@10.2.0"
+    },
+    {
+      "sha": "8a76f39d9844f36797cd794fb74b47c635798ae5",
+      "subject": "build: eslint@8.34.0"
+    },
+    {
+      "sha": "5ad95419bac1cb5bcc1f09fd1872f2b2af4aed1a",
+      "subject": "docs: fix typos in history"
+    },
+    {
+      "sha": "9bc1742937253825d2dc1e9a48c8e8424f0a315b",
+      "subject": "build: support Node.js 19.x"
+    },
+    {
+      "sha": "74beeac0718c928b4ba249aba3652c52fbe32ca8",
+      "subject": "Fix routing requests without method"
+    },
+    {
+      "sha": "0debedf4f31bb20203da0534719b9b10d6ac9a29",
+      "subject": "build: fix code coverage aggregate upload"
+    },
+    {
+      "sha": "8c24fa8f7b6d443869c655166c93869d8b299627",
+      "subject": "tests: wait for server close in app.listen()"
+    },
+    {
+      "sha": "f4e48bc43eece928f005a4458c87a16ce089e8e5",
+      "subject": "build: ejs@3.1.9"
+    },
+    {
+      "sha": "b8b2eff3c3eac6a1df3919a87f7c7316d40ae97a",
+      "subject": "build: eslint@8.36.0"
+    },
+    {
+      "sha": "f540c3b0195393974d4875a410f4c00a07a2ab60",
+      "subject": "build: Node.js@18.15"
+    },
+    {
+      "sha": "3531987844e533742f1159b0c3f1e07fad2e4597",
+      "subject": "lint: remove unused function arguments in Route tests"
+    },
+    {
+      "sha": "91b6fb83b4cf30ec626c0582f0b3a0a98d8afcb4",
+      "subject": "build: use nyc@14.1.1 for Node.js < 10"
+    },
+    {
+      "sha": "24e4a2570d15d6cca53023410f754929c5391c6f",
+      "subject": "build: Node.js@16.20"
+    },
+    {
+      "sha": "2a00da2067b7017f769c9100205a2a5f267a884b",
+      "subject": "tests: use random port in listen test"
+    },
+    {
+      "sha": "13df1de857688057f3c7e6d315321b19f8e4259e",
+      "subject": "build: eslint@8.47.0"
+    },
+    {
+      "sha": "8d8bfaac7be5d06c0a8fcc069b1ee5b0ec398cd9",
+      "subject": "build: Node.js@18.17"
+    },
+    {
+      "sha": "02d1c3916ebaec776b4d754be54aa1500e2e9563",
+      "subject": "build: Node.js@19.9"
+    },
+    {
+      "sha": "a22920707bfd30e083e5b8e076841d226266cb06",
+      "subject": "build: actions/checkout@v4"
+    },
+    {
+      "sha": "c4fe7de7bcb7ce241dfa7137fad96d48b75e86f3",
+      "subject": "docs: update TC governance rules"
+    },
+    {
+      "sha": "59aae7686b995186a71da48abd4af5be72ff4ef5",
+      "subject": "docs: add project captains to contribution"
+    },
+    {
+      "sha": "2a89eb5c749a168820d6ea96723ad8a7e979a58b",
+      "subject": "tests: fix handling multiple callbacks"
+    },
+    {
+      "sha": "3abea7f8189c73f7f219d8878343d961eb9a4910",
+      "subject": "examples: remove multipart example"
+    },
+    {
+      "sha": "e720c5a21bfed5a9c73b2407797023bacad6980e",
+      "subject": "docs: add documentation for benchmarks"
+    },
+    {
+      "sha": "59af63ac2e6aea6a9cefb6fe27705ccf024d8373",
+      "subject": "build: Node.js@18.19"
+    },
+    {
+      "sha": "0e3ab6ec215fc297473323fb1e8d0df03033e774",
+      "subject": "examples: improve view count in cookie-sessions"
+    },
+    {
+      "sha": "734b28190085c052e3ecd9c7d0b9595d9edb1b85",
+      "subject": "build: support Node.js 20.x"
+    },
+    {
+      "sha": "fdeb1d3176d11506557388ecaa2fe6a250e17efc",
+      "subject": "build: support Node.js 20.x in appveyor"
+    },
+    {
+      "sha": "c259c3407f8c503c83d95fb1f30b132b73bb6388",
+      "subject": "build: support Node.js 21.x"
+    },
+    {
+      "sha": "b9fea1224516e372f6f63480cc1830e5f6ee63e6",
+      "subject": "build: support Node.js 21.x in appveyor"
+    },
+    {
+      "sha": "23b44b3ddd45bc68487cc34cd576b117ba9d2609",
+      "subject": "build: support Node.js 21.6.2"
+    },
+    {
+      "sha": "e3eca805847e0057ab1c83e7d61a6cc1c1ca47f1",
+      "subject": "build: pin Node 21.x to minor"
+    },
+    {
+      "sha": "b625132864ef40b1fb119ff7c7b984573a7974c6",
+      "subject": "build: pin Node 21.x to minor"
+    },
+    {
+      "sha": "1b51edac7c5f2844e23602164a52643bb625993a",
+      "subject": "4.18.3"
+    }
+  ]
+}

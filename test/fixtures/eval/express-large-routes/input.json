@@ -1,0 +1,86 @@
+{
+  "projectName": "Express",
+  "fromVersion": "4.18.1",
+  "toVersion": "4.18.2",
+  "date": "2022-10-08",
+  "environment": "prod",
+  "source": {
+    "repository": "https://github.com/expressjs/express",
+    "fromSha": "d854c43ea177d1faeea56189249fff8c24a764bd",
+    "toSha": "8368dc178af16b91b576c4c1d135f701a0007e5d"
+  },
+  "commits": [
+    {
+      "sha": "a2dfc56a4982e0a33c67d6d0c22e087e95bff79e",
+      "subject": "build: mocha@10.0.0"
+    },
+    {
+      "sha": "745a63f8256828a061e1b2f0a5f8e52eb9538da1",
+      "subject": "build: ejs@3.1.8"
+    },
+    {
+      "sha": "ab2c70b954ac2ceb3aaf466b0f59089999952dd0",
+      "subject": "build: Node.js@18.1"
+    },
+    {
+      "sha": "7ec5dd2b3c5e7379f68086dae72859f5573c8b9b",
+      "subject": "Fix regression routing a large stack in a single route"
+    },
+    {
+      "sha": "97f0a518d8d697e310abf293a71383cf9d04d749",
+      "subject": "tests: verify all handlers called in stack tests"
+    },
+    {
+      "sha": "2c47827053233e707536019a15499ccf5496dc9d",
+      "subject": "examples: remove unused function arguments in params"
+    },
+    {
+      "sha": "8d98e86d7fe4e4dd50e42e73301b0bb7b7132758",
+      "subject": "build: Node.js@16.17"
+    },
+    {
+      "sha": "97131bcda8bd3cdbe53ef14fbd08dcc23a53e758",
+      "subject": "build: Node.js@18.7"
+    },
+    {
+      "sha": "ecd7572f1e920b7a512452b8d9806ae617a99c54",
+      "subject": "build: Node.js@14.20"
+    },
+    {
+      "sha": "644f6464b9f61cbafa8f880636b1aa5237d95bad",
+      "subject": "build: supertest@6.2.4"
+    },
+    {
+      "sha": "33e8dc303af9277f8a7e4f46abfdcb5e72f6797b",
+      "subject": "docs: use Node.js name style"
+    },
+    {
+      "sha": "340be0f79afb9b3176afb76235aa7f92acbd5050",
+      "subject": "build: eslint@8.24.0"
+    },
+    {
+      "sha": "689d175b8b39d8860b81d723233fb83d15201827",
+      "subject": "deps: body-parser@1.20.1"
+    },
+    {
+      "sha": "24b3dc551670ac4fb0cd5a2bd5ef643c9525e60f",
+      "subject": "deps: qs@6.11.0"
+    },
+    {
+      "sha": "f56ce73186e885a938bfdb3d3d1005a58e6ae12b",
+      "subject": "build: supertest@6.3.0"
+    },
+    {
+      "sha": "bb7907b932afe3a19236a642f6054b6c8f7349a0",
+      "subject": "build: Node.js@18.10"
+    },
+    {
+      "sha": "61f40491222dbede653b9938e6a4676f187aab44",
+      "subject": "docs: replace Freenode with Libera Chat"
+    },
+    {
+      "sha": "8368dc178af16b91b576c4c1d135f701a0007e5d",
+      "subject": "4.18.2"
+    }
+  ]
+}

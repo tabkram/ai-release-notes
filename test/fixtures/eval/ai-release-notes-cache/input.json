@@ -1,0 +1,38 @@
+{
+  "projectName": "ai-release-notes",
+  "fromVersion": "v0.5.3",
+  "toVersion": "v0.6.0",
+  "date": "2026-11-16",
+  "environment": "prod",
+  "source": {
+    "repository": "https://github.com/tabkram/ai-release-notes",
+    "fromSha": "d390779613ae5e307e3b71d8042fab8f8cb3360c",
+    "toSha": "797d868c86d192e9e37bc7a68e34992e1f62e185"
+  },
+  "commits": [
+    {
+      "sha": "65c5583bf2b5b11d0fb6e1579771b543d2ffd3fa",
+      "subject": "feat: allow configurable retries for LLM API requests"
+    },
+    {
+      "sha": "c3dd9e965ce8129cd115861df5d144b99e7dec2d",
+      "subject": "fix: avoid retranslating the full index page when adding a release"
+    },
+    {
+      "sha": "838acd83ef4248372d1f866babcd8efb853adb89",
+      "subject": "fix: unwrap HTML entry fences and cap retry delays"
+    },
+    {
+      "sha": "7aa4cc0632a44eee4e491d88154abcb309981640",
+      "subject": "feat(cache)!: add local and provider prompt caching"
+    },
+    {
+      "sha": "d5b4c12f0199b5bc1742c3411d3670489879913a",
+      "subject": "ci(npm): unify publishing and prerelease cleanup"
+    },
+    {
+      "sha": "797d868c86d192e9e37bc7a68e34992e1f62e185",
+      "subject": "chore(release): 0.6.0"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "projectName": "ai-release-notes",
+  "fromVersion": "v0.4.0",
+  "toVersion": "v0.5.0",
+  "date": "2026-07-28",
+  "environment": "prod",
+  "source": {
+    "repository": "https://github.com/tabkram/ai-release-notes",
+    "fromSha": "7611534ae4ff6e0d3dd9d5a645f7dbd5180ba751",
+    "toSha": "71fb5f7d9a61ab43759342ce14e3e4a156c13644"
+  },
+  "commits": [
+    {
+      "sha": "3ab2a9e2b3a62ccaaa950fa924b9286fad72b100",
+      "subject": "docs: restructure documentation into dedicated guides"
+    },
+    {
+      "sha": "6fa84ce062119ed928cec63a4cdd49a794547e27",
+      "subject": "feat: update config default dir to \".ai-release-notes/\""
+    },
+    {
+      "sha": "d129da26963aeb16827c79225e296acae3ebd72f",
+      "subject": "feat: enable revision of release indexes in prompt session"
+    },
+    {
+      "sha": "b5646bdcf01d56cf0bbd829013e5ce1f1410e266",
+      "subject": "feat(prompt): add intelligent scoped release-note assistant"
+    },
+    {
+      "sha": "b498eccc3269ff7ea77d84a78070234a042aa44a",
+      "subject": "Merge pull request #4 from tabkram/feature/prompt"
+    },
+    {
+      "sha": "71fb5f7d9a61ab43759342ce14e3e4a156c13644",
+      "subject": "chore(release): 0.5.0"
+    }
+  ]
+}
